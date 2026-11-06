@@ -1,0 +1,357 @@
+/* ============================================
+   Shortcut Path Recorder — Mobile-First Styles
+   ============================================ */
+
+/* Reset & base */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+               Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;    /* Prevent double-tap zoom */
+  overscroll-behavior: none;     /* Prevent pull-to-refresh */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- GPS Permission Overlay ---- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(10, 10, 15, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  transition: opacity 0.3s ease;
+}
+
+.overlay.hidden {
+  display: none;
+}
+
+.overlay.fade-out {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.overlay-card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 36px 28px;
+  max-width: 360px;
+  width: 100%;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.overlay-icon {
+  font-size: 48px;
+  line-height: 1;
+}
+
+.overlay-card h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.overlay-card p {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.5;
+}
+
+.btn-text {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 8px;
+  transition: color 0.2s;
+}
+
+.btn-text:hover {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ---- Map ---- */
+#map {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+/* ---- Control panel overlay ---- */
+#controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: rgba(15, 15, 20, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 14px 16px;
+  padding-bottom: max(14px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.app-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  text-align: center;
+  opacity: 0.85;
+}
+
+/* ---- Status bar ---- */
+#status-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.status-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 8px 4px;
+}
+
+.status-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.status-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-value.idle {
+  color: #8b8b9e;
+}
+
+.status-value.recording {
+  color: #E51B23;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.status-value.stopped {
+  color: #22c55e;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ---- Buttons ---- */
+#action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  flex: 1;
+  padding: 12px 8px;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.btn:active {
+  transform: scale(0.96);
+}
+
+.btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-start {
+  background: #E51B23;
+  color: #ffffff;
+}
+
+.btn-stop {
+  background: #f59e0b;
+  color: #1a1a1a;
+}
+
+.btn-download {
+  background: #22c55e;
+  color: #1a1a1a;
+}
+
+/* ---- GPS accuracy indicator (top-right) ---- */
+#gps-accuracy {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1000;
+  background: rgba(15, 15, 20, 0.88);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #ffffff;
+  padding: 7px 14px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.3s;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#gps-accuracy.good {
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+#gps-accuracy.fair {
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+#gps-accuracy.poor {
+  border-color: rgba(229, 27, 35, 0.5);
+}
+
+/* ---- Auto-follow button ---- */
+.map-btn {
+  position: absolute;
+  top: 90px;
+  left: 10px;
+  z-index: 1000;
+  width: 36px;
+  height: 36px;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  box-shadow: 0 1px 5px rgba(0,0,0,0.15);
+  transition: background 0.2s;
+}
+
+.map-btn:active {
+  background: #e8e8e8;
+}
+
+.map-btn.active {
+  background: #dbeafe;
+  border-color: #4285F4;
+}
+
+/* ---- Toast notifications ---- */
+#toast-container {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  width: 90%;
+  max-width: 380px;
+}
+
+.toast {
+  background: rgba(15, 15, 20, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.4;
+  pointer-events: auto;
+  animation: toast-in 0.3s ease forwards;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  width: 100%;
+}
+
+.toast.info    { border-left: 3px solid #4285F4; }
+.toast.success { border-left: 3px solid #22c55e; }
+.toast.warning { border-left: 3px solid #f59e0b; }
+.toast.error   { border-left: 3px solid #E51B23; }
+
+.toast.fade-out {
+  animation: toast-out 0.3s ease forwards;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-12px); }
+}
+
+/* ---- Leaflet overrides ---- */
+.leaflet-control-attribution {
+  font-size: 9px !important;
+  opacity: 0.6;
+}
+
+/* Fix Leaflet grabbing on touch */
+.leaflet-container {
+  touch-action: pan-x pan-y;
+}
+
+/* ---- Path endpoint markers ---- */
+.path-endpoint {
+  border: none !important;
+  background: none !important;
+}
