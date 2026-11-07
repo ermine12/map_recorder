@@ -68,6 +68,7 @@ const dom = {
   btnStart: document.getElementById('btn-start'),
   btnStop: document.getElementById('btn-stop'),
   btnDownload: document.getElementById('btn-download'),
+  btnSaveRecorderMaster: document.getElementById('btn-save-recorder-master'),
   btnFollow: document.getElementById('btn-follow'),
   gpsAccuracy: document.getElementById('gps-accuracy'),
   gpsAccuracyText: document.getElementById('gps-accuracy-text'),
@@ -265,6 +266,11 @@ function initMap() {
 
   bindControls();
   dom.btnFollow.classList.add('active');
+
+  // Load and render persistent Master Shortcuts Layer
+  if (typeof MasterLayerManager !== 'undefined') {
+    MasterLayerManager.renderOnMap(state.map);
+  }
 
   // Check GPS availability and show permission overlay or proceed
   checkGpsAvailability();
@@ -593,6 +599,7 @@ function startRecording() {
   dom.btnStart.disabled = true;
   dom.btnStop.disabled = false;
   dom.btnDownload.disabled = true;
+  if (dom.btnSaveRecorderMaster) dom.btnSaveRecorderMaster.disabled = true;
 
   dom.recState.textContent = '● REC';
   dom.recState.className = 'status-value recording';
@@ -618,6 +625,9 @@ function stopRecording() {
   dom.btnStart.disabled = false;
   dom.btnStop.disabled = true;
   dom.btnDownload.disabled = state.coordinates.length < 2;
+  if (dom.btnSaveRecorderMaster) {
+    dom.btnSaveRecorderMaster.disabled = state.coordinates.length < 2;
+  }
 
   dom.recState.textContent = 'Stopped';
   dom.recState.className = 'status-value stopped';
@@ -742,11 +752,19 @@ function bindControls() {
       tab.classList.add('active');
       const panelId = `tab-${tab.dataset.tab}`;
       document.getElementById(panelId).classList.add('active');
+
+      // Refresh master stats if switching to master tab
+      if (tab.dataset.tab === 'master') {
+        updateMasterStatsUI();
+      }
     });
   });
 
   // Delta Extractor UI wiring
   bindDeltaControls();
+
+  // Master Layer UI wiring
+  bindMasterControls();
 }
 
 // ============================================
@@ -757,6 +775,7 @@ function bindDeltaControls() {
   const gpxFileName = document.getElementById('gpx-file-name');
   const btnExtract = document.getElementById('btn-extract');
   const btnDeltaDownload = document.getElementById('btn-delta-download');
+  const btnSaveDeltaMaster = document.getElementById('btn-save-delta-master');
   const btnDeltaClear = document.getElementById('btn-delta-clear');
   const deltaStatus = document.getElementById('delta-status');
   const deltaStatusText = document.getElementById('delta-status-text');
@@ -789,6 +808,7 @@ function bindDeltaControls() {
 
     btnExtract.disabled = true;
     btnDeltaDownload.disabled = true;
+    if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = true;
     btnDeltaClear.disabled = true;
 
     const bufferMeters = parseFloat(bufferInput.value) || 4.5;
@@ -813,6 +833,7 @@ function bindDeltaControls() {
             `✅ Found ${result.segmentCount} shortcut(s) — ${Math.round(result.totalLengthMeters)}m total`
           );
           btnDeltaDownload.disabled = false;
+          if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = result.segmentCount === 0;
           btnDeltaClear.disabled = false;
           btnExtract.disabled = false;
           showToast(
@@ -825,6 +846,21 @@ function bindDeltaControls() {
       }
     );
   });
+
+  // Save delta result to Master Layer with intelligent deduplication
+  if (btnSaveDeltaMaster) {
+    btnSaveDeltaMaster.addEventListener('click', () => {
+      if (typeof DeltaExtractor !== 'undefined' && DeltaExtractor._lastResult && typeof MasterLayerManager !== 'undefined') {
+        const importRes = MasterLayerManager.importGeoJSON(DeltaExtractor._lastResult, 5.0);
+        showToast(
+          `Master updated: +${importRes.addedCount} new, 🔄 ${importRes.reinforcedCount} reinforced.`,
+          'success'
+        );
+        btnSaveDeltaMaster.disabled = true;
+        updateMasterStatsUI();
+      }
+    });
+  }
 
   // Download result
   btnDeltaDownload.addEventListener('click', () => {
@@ -845,6 +881,7 @@ function bindDeltaControls() {
     gpxFileName.classList.remove('loaded');
     btnExtract.disabled = true;
     btnDeltaDownload.disabled = true;
+    if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = true;
     btnDeltaClear.disabled = true;
     setDeltaStatus('', 'Upload a GPX file to begin.');
     showToast('Delta layers cleared.', 'info');
@@ -853,6 +890,127 @@ function bindDeltaControls() {
   function setDeltaStatus(type, text) {
     deltaStatus.className = `delta-status ${type}`;
     deltaStatusText.textContent = text;
+  }
+}
+
+// ============================================
+// Master Layer UI Wiring
+// ============================================
+function updateMasterStatsUI() {
+  if (typeof MasterLayerManager === 'undefined') return;
+  const stats = MasterLayerManager.getStats();
+
+  const elCount = document.getElementById('master-count');
+  const elDist = document.getElementById('master-distance');
+  const elWalks = document.getElementById('master-walks');
+
+  if (elCount) elCount.textContent = stats.totalShortcuts;
+  if (elDist) elDist.textContent = formatDistance(stats.totalDistanceMeters);
+  if (elWalks) elWalks.textContent = stats.totalWalks;
+}
+
+function bindMasterControls() {
+  const btnSaveRecorderMaster = document.getElementById('btn-save-recorder-master');
+  const masterImportInput = document.getElementById('master-import-input');
+  const btnExportMaster = document.getElementById('btn-export-master');
+  const btnClearMaster = document.getElementById('btn-clear-master');
+  const toggleMasterLayer = document.getElementById('toggle-master-layer');
+
+  // Initial stats render
+  updateMasterStatsUI();
+
+  // Save live recorded path to Master Layer (deduplicated)
+  if (btnSaveRecorderMaster) {
+    btnSaveRecorderMaster.addEventListener('click', () => {
+      if (state.coordinates.length < 2) {
+        showToast('Not enough points to save.', 'warning');
+        return;
+      }
+      if (typeof MasterLayerManager === 'undefined') return;
+
+      const singleFeature = {
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: state.coordinates
+        },
+        properties: {
+          name: `shortcut-${new Date().toISOString().slice(0, 10)}`,
+          distance_meters: Math.round(state.totalDistance),
+          points_recorded: state.coordinates.length
+        }
+      };
+
+      const res = MasterLayerManager.addShortcut(singleFeature, 5.0);
+      if (res.action === 'reinforced') {
+        showToast(`🔄 Reinforced existing ${res.name} (walked ${res.timesWalked}x)!`, 'success');
+      } else {
+        showToast(`✨ Saved as new ${res.name} in Master Layer!`, 'success');
+      }
+
+      btnSaveRecorderMaster.disabled = true;
+      updateMasterStatsUI();
+    });
+  }
+
+  // Import Past GeoJSON (with automatic deduplication)
+  if (masterImportInput) {
+    masterImportInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const json = JSON.parse(event.target.result);
+          const res = MasterLayerManager.importGeoJSON(json, 5.0);
+          showToast(
+            `Imported: +${res.addedCount} new shortcuts, 🔄 ${res.reinforcedCount} reinforced duplicates.`,
+            'success'
+          );
+          updateMasterStatsUI();
+        } catch (err) {
+          showToast('Invalid GeoJSON file.', 'error');
+        }
+      };
+      reader.readAsText(file);
+      masterImportInput.value = '';
+    });
+  }
+
+  // Export Master GeoJSON
+  if (btnExportMaster) {
+    btnExportMaster.addEventListener('click', () => {
+      if (typeof MasterLayerManager === 'undefined') return;
+      const ok = MasterLayerManager.exportMasterGeoJSON();
+      if (ok) {
+        showToast('Master GeoJSON exported successfully!', 'success');
+      } else {
+        showToast('No shortcuts in Master Layer to export.', 'warning');
+      }
+    });
+  }
+
+  // Clear Master Layer
+  if (btnClearMaster) {
+    btnClearMaster.addEventListener('click', () => {
+      if (confirm('Are you sure you want to delete all saved shortcuts in your Master Layer?')) {
+        if (typeof MasterLayerManager !== 'undefined') {
+          MasterLayerManager.clearAll();
+          updateMasterStatsUI();
+          showToast('Master Layer cleared.', 'info');
+        }
+      }
+    });
+  }
+
+  // Toggle map visibility
+  if (toggleMasterLayer) {
+    toggleMasterLayer.addEventListener('change', (e) => {
+      if (typeof MasterLayerManager !== 'undefined') {
+        MasterLayerManager.setVisibility(e.target.checked);
+      }
+    });
   }
 }
 

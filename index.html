@@ -53,7 +53,8 @@
     <!-- Tab switcher -->
     <div id="tab-bar">
       <button class="tab active" data-tab="recorder">⏺ Recorder</button>
-      <button class="tab" data-tab="extractor">✂️ Delta Extractor</button>
+      <button class="tab" data-tab="extractor">✂️ Delta</button>
+      <button class="tab" data-tab="master">🗂️ Master Map</button>
     </div>
 
     <!-- ===== RECORDER TAB ===== -->
@@ -82,6 +83,7 @@
       <div id="action-buttons">
         <button id="btn-start" class="btn btn-start">⏺ Start</button>
         <button id="btn-stop" class="btn btn-stop" disabled>⏹ Stop</button>
+        <button id="btn-save-recorder-master" class="btn btn-master-save" disabled title="Merge into Master Layer">💾 Save to Master</button>
         <button id="btn-download" class="btn btn-download" disabled>⬇ GeoJSON</button>
       </div>
     </div>
@@ -120,9 +122,45 @@
 
       <!-- Delta action buttons -->
       <div class="delta-buttons">
-        <button id="btn-extract" class="btn btn-extract" disabled>✂️ Extract Shortcuts</button>
-        <button id="btn-delta-download" class="btn btn-download" disabled>⬇ Download Result</button>
+        <button id="btn-extract" class="btn btn-extract" disabled>✂️ Extract</button>
+        <button id="btn-save-delta-master" class="btn btn-master-save" disabled title="Merge into Master Layer">💾 Save to Master</button>
+        <button id="btn-delta-download" class="btn btn-download" disabled>⬇ GeoJSON</button>
         <button id="btn-delta-clear" class="btn btn-clear" disabled>🗑️ Clear</button>
+      </div>
+    </div>
+
+    <!-- ===== MASTER LAYER TAB ===== -->
+    <div id="tab-master" class="tab-panel">
+      <!-- Master stats cards -->
+      <div class="master-stats-grid">
+        <div class="master-stat-card">
+          <span class="stat-number" id="master-count">0</span>
+          <span class="stat-title">Shortcuts</span>
+        </div>
+        <div class="master-stat-card">
+          <span class="stat-number" id="master-distance">0 m</span>
+          <span class="stat-title">Total Distance</span>
+        </div>
+        <div class="master-stat-card">
+          <span class="stat-number" id="master-walks">0</span>
+          <span class="stat-title">Walks Logged</span>
+        </div>
+      </div>
+
+      <!-- Visibility toggle row -->
+      <div class="master-toggle-row">
+        <label class="toggle-label" for="toggle-master-layer">
+          <span>👁️ Show Master Layer on Map</span>
+        </label>
+        <input type="checkbox" id="toggle-master-layer" checked class="toggle-checkbox">
+      </div>
+
+      <!-- Master actions -->
+      <div class="master-actions-row">
+        <label for="master-import-input" class="btn btn-upload master-btn">📂 Import Past GeoJSON</label>
+        <input type="file" id="master-import-input" accept=".geojson,.json" hidden>
+        <button id="btn-export-master" class="btn btn-download master-btn">⬇ Export Clean Master</button>
+        <button id="btn-clear-master" class="btn btn-clear" title="Clear Master Layer">🗑️</button>
       </div>
     </div>
   </div>
@@ -132,8 +170,14 @@
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
           crossorigin=""></script>
 
-  <!-- Turf.js (geospatial math for Delta Extractor) -->
+  <!-- Turf.js (geospatial math for Delta Extractor & Deduplication) -->
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
+
+  <!-- Deduplication & Merging Engine -->
+  <script src="merger.js"></script>
+
+  <!-- Master Layer Storage & Overlay Manager -->
+  <script src="master.js"></script>
 
   <!-- Delta Extractor module -->
   <script src="delta.js"></script>
