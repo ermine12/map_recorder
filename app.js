@@ -828,18 +828,30 @@ function bindDeltaControls() {
           showToast(message, 'error');
         } else if (step === 'done') {
           const result = message;
-          setDeltaStatus(
-            'done',
-            `✅ Found ${result.segmentCount} shortcut(s) — ${Math.round(result.totalLengthMeters)}m total`
-          );
-          btnDeltaDownload.disabled = false;
-          if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = result.segmentCount === 0;
-          btnDeltaClear.disabled = false;
-          btnExtract.disabled = false;
-          showToast(
-            `Extracted ${result.segmentCount} shortcut(s), ${Math.round(result.totalLengthMeters)}m`,
-            'success'
-          );
+          if (result.segmentCount === 0) {
+            setDeltaStatus(
+              'done',
+              '⚠️ Entire track overlaps with existing OSM roads (no new shortcuts found).'
+            );
+            btnDeltaDownload.disabled = true;
+            if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = true;
+            btnDeltaClear.disabled = false;
+            btnExtract.disabled = false;
+            showToast('All track segments overlap with known OSM roads.', 'info');
+          } else {
+            setDeltaStatus(
+              'done',
+              `✅ Found ${result.segmentCount} shortcut(s) — ${Math.round(result.totalLengthMeters)}m total`
+            );
+            btnDeltaDownload.disabled = false;
+            if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = false;
+            btnDeltaClear.disabled = false;
+            btnExtract.disabled = false;
+            showToast(
+              `Extracted ${result.segmentCount} shortcut(s), ${Math.round(result.totalLengthMeters)}m`,
+              'success'
+            );
+          }
         } else {
           setDeltaStatus('processing', message);
         }

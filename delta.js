@@ -159,56 +159,69 @@ var DeltaExtractor = (function () {
 
   /**
    * Fetch all highway ways from OpenStreetMap within the given bounding box
-   * using the Overpass API.
+   * using a fast parallel race across public Overpass mirrors.
    *
    * @param {{ north: number, south: number, east: number, west: number }} bbox
+   * @param {function} [onStatus]
    * @returns {Promise<number[][][]>}  Array of road LineStrings, each an array of [lng, lat].
    */
-  function fetchOSMRoads(bbox) {
+  function fetchOSMRoads(bbox, onStatus) {
+    if (typeof onStatus === 'function') {
+      onStatus('🌐 Connecting to OpenStreetMap mirrors…');
+    }
+
     // Add ~0.001° padding so edge roads are included
     var pad = 0.001;
-    var south = bbox.south - pad;
-    var west = bbox.west - pad;
-    var north = bbox.north + pad;
-    var east = bbox.east + pad;
+    var south = (bbox.south - pad).toFixed(6);
+    var west = (bbox.west - pad).toFixed(6);
+    var north = (bbox.north + pad).toFixed(6);
+    var east = (bbox.east + pad).toFixed(6);
 
+    // Optimized lightweight Overpass query: out skel qt (no heavy metadata/tags)
     var query =
-      '[out:json][timeout:30];\n' +
+      '[out:json][timeout:15];\n' +
       '(\n' +
       '  way["highway"](' + south + ',' + west + ',' + north + ',' + east + ');\n' +
       ');\n' +
-      'out body;\n' +
+      'out skel qt;\n' +
       '>;\n' +
       'out skel qt;';
 
     var servers = [
+      'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
       'https://overpass-api.de/api/interpreter',
-      'https://overpass.kumi.systems/api/interpreter',
-      'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+      'https://overpass.kumi.systems/api/interpreter'
     ];
 
-    function tryServer(index) {
-      if (index >= servers.length) {
-        return Promise.reject(new Error('All Overpass API servers failed or timed out. Please check your internet connection.'));
-      }
-      return fetch(servers[index], {
+    // Race mirrors in parallel: the fastest successful response wins immediately!
+    var abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+
+    var requests = servers.map(function (serverUrl) {
+      var fetchOptions = {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'data=' + encodeURIComponent(query)
-      })
-        .then(function (response) {
-          if (!response.ok) {
-            return tryServer(index + 1);
-          }
-          return response.json();
-        })
-        .catch(function () {
-          return tryServer(index + 1);
-        });
-    }
+      };
+      if (abortController) {
+        fetchOptions.signal = abortController.signal;
+      }
 
-    return tryServer(0)
+      return fetch(serverUrl, fetchOptions)
+        .then(function (res) {
+          if (!res.ok) {
+            throw new Error(serverUrl + ' HTTP ' + res.status);
+          }
+          return res.json();
+        });
+    });
+
+    return Promise.any(requests)
       .then(function (data) {
+        // Abort the slower pending requests
+        if (abortController) {
+          abortController.abort();
+        }
+
         // Build a lookup map:  nodeId → [lng, lat]
         var nodeLookup = {};
         var elements = data.elements || [];
@@ -233,13 +246,15 @@ var DeltaExtractor = (function () {
             }
           }
 
-          // A valid LineString needs at least 2 points
           if (roadCoords.length >= 2) {
             roads.push(roadCoords);
           }
         }
 
         return roads;
+      })
+      .catch(function (err) {
+        throw new Error('Could not connect to OpenStreetMap servers. Please try again.');
       });
   }
 
@@ -540,10 +555,14 @@ var DeltaExtractor = (function () {
         var typeLabel = fileName.toLowerCase().endsWith('.geojson') || fileName.toLowerCase().endsWith('.json') ? 'GeoJSON' : 'GPX';
         onProgress('parse', typeLabel + ' parsed: ' + parsed.coords.length + ' points');
 
-        // Step 3 — Fetch OSM roads (async)
-        fetchOSMRoads(parsed.bbox)
+        // Step 3 — Fetch OSM roads (async with fast parallel race)
+        onProgress('fetch', '🌐 Connecting to OpenStreetMap mirrors…');
+
+        fetchOSMRoads(parsed.bbox, function (statusMsg) {
+          onProgress('fetch', statusMsg);
+        })
           .then(function (roadCoordArrays) {
-            onProgress('fetch', 'Fetched ' + roadCoordArrays.length + ' OSM road segments');
+            onProgress('extract', '✂️ Analyzing overlap against ' + roadCoordArrays.length + ' OSM road segments…');
 
             // Step 4 — Extract shortcuts
             var shortcuts = extractShortcuts(
@@ -552,11 +571,10 @@ var DeltaExtractor = (function () {
               bufferMeters,
               minLengthMeters
             );
-            onProgress('extract', 'Found ' + shortcuts.length + ' new shortcut segments');
 
             // Step 5 — Display on map
             displayOnMap(map, shortcuts, roadCoordArrays);
-            onProgress('display', 'Displayed on map');
+            onProgress('display', 'Rendering results on map…');
 
             // Step 6 — Build GeoJSON and store
             var geojson = buildGeoJSON(shortcuts, bufferMeters);
