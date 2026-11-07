@@ -15,7 +15,11 @@ const CONFIG = {
   defaultZoom: 16,
   tileUrl: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   tileAttribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  minDistanceMeters: 2.5,
+  // --- 4-Tier GPS Filter Thresholds ---
+  maxAccuracyMeters: 20,        // Tier 1: reject blurry satellite locks
+  minDistanceMeters: 2.5,       // Tier 2: anti-jitter standing-still filter
+  maxJumpMeters: 35,            // Tier 3: anti-teleportation single-update cap
+  maxSpeedMps: 8,               // Tier 4: human speed ceiling (~29 km/h)
   pathColor: '#E51B23',
   pathWeight: 4,
   geoOptions: {
@@ -43,7 +47,8 @@ const state = {
   coordinates: [],
   totalDistance: 0,
   pathLine: null,
-  lastRecordedCoord: null,
+  lastRecordedCoord: null,       // { lat, lng, time } — includes timestamp for speed calc
+  rejectedPoints: 0,             // Count of points rejected by the 4-tier filter
   autoFollow: true,
   recordingStartTime: null,
   timerInterval: null,
@@ -439,38 +444,107 @@ function stopTracking() {
 }
 
 function onPositionUpdate(position) {
-  const { latitude, longitude, accuracy } = position.coords;
+  const { latitude, longitude } = position.coords;
+  const accuracy = position.coords.accuracy || 999;
+  // Edge Case B: fallback to Date.now() if browser omits timestamp
+  const currentTime = (position.timestamp && isFinite(position.timestamp))
+    ? position.timestamp
+    : Date.now();
 
+  // Always update the blue dot and accuracy badge (even for rejected points)
   updateUserMarker(latitude, longitude, accuracy);
   updateAccuracyBadge(accuracy);
 
+  // Only run the recording filter pipeline while actively recording
   if (!state.isRecording) return;
 
-  // --- Anti-jitter filter ---
-  if (state.lastRecordedCoord) {
-    const dist = haversineDistance(
-      state.lastRecordedCoord.lat,
-      state.lastRecordedCoord.lng,
-      latitude,
-      longitude
+  // =============================================
+  // TIER 1: Hardware Accuracy Threshold
+  // Reject blurry satellite locks (accuracy > 20m)
+  // =============================================
+  if (accuracy > CONFIG.maxAccuracyMeters) {
+    state.rejectedPoints++;
+    console.warn(
+      `[GPS Filter T1] Rejected: accuracy ${accuracy.toFixed(1)}m > ${CONFIG.maxAccuracyMeters}m`
     );
-
-    if (dist < CONFIG.minDistanceMeters) return;
-
-    state.totalDistance += dist;
+    return; // No map/polyline update — Edge Case C
   }
 
-  // Record clean [lng, lat] for GeoJSON
+  // =============================================
+  // Edge Case A: First Point Initialization
+  // No previous point exists — bypass distance/speed checks.
+  // Only the accuracy check (Tier 1) gates the first point.
+  // =============================================
+  if (state.coordinates.length === 0) {
+    state.coordinates.push([longitude, latitude]);
+    state.lastRecordedCoord = { lat: latitude, lng: longitude, time: currentTime };
+
+    state.pathLine.addLatLng(L.latLng(latitude, longitude));
+    updatePathMarkers();
+    updateStatusBar();
+    return;
+  }
+
+  // =============================================
+  // Calculate metrics from the last valid point
+  // =============================================
+  const dist = haversineDistance(
+    state.lastRecordedCoord.lat,
+    state.lastRecordedCoord.lng,
+    latitude,
+    longitude
+  );
+
+  // =============================================
+  // TIER 2: Minimum Movement Threshold (Anti-Jitter)
+  // Discard micro-drift while standing still (< 2.5m)
+  // =============================================
+  if (dist < CONFIG.minDistanceMeters) {
+    return; // Silent discard — no log spam for normal standing
+  }
+
+  // =============================================
+  // TIER 3: Absolute Max Jump Cap (Anti-Teleportation)
+  // No pedestrian can move 35m in a single GPS tick
+  // =============================================
+  if (dist > CONFIG.maxJumpMeters) {
+    state.rejectedPoints++;
+    console.warn(
+      `[GPS Filter T3] Rejected: jump ${dist.toFixed(1)}m > ${CONFIG.maxJumpMeters}m cap`
+    );
+    return; // No map/polyline update — Edge Case C
+  }
+
+  // =============================================
+  // TIER 4: Human Speed Limit (Physics Validation)
+  // speed = distance / time; reject if > 8 m/s (~29 km/h)
+  // =============================================
+  const timeElapsedSec = (currentTime - state.lastRecordedCoord.time) / 1000;
+
+  if (timeElapsedSec > 0) {
+    const speedMps = dist / timeElapsedSec;
+
+    if (speedMps > CONFIG.maxSpeedMps) {
+      state.rejectedPoints++;
+      console.warn(
+        `[GPS Filter T4] Rejected: speed ${speedMps.toFixed(1)} m/s > ${CONFIG.maxSpeedMps} m/s ceiling (${dist.toFixed(1)}m in ${timeElapsedSec.toFixed(1)}s)`
+      );
+      return; // No map/polyline update — Edge Case C
+    }
+  }
+  // If timeElapsedSec is 0 or negative (clock skew), skip speed check
+  // but still allow the point if it passed Tiers 1-3.
+
+  // =============================================
+  // ALL 4 TIERS PASSED — Commit the point
+  // =============================================
+  state.totalDistance += dist;
   state.coordinates.push([longitude, latitude]);
-  state.lastRecordedCoord = { lat: latitude, lng: longitude };
+  state.lastRecordedCoord = { lat: latitude, lng: longitude, time: currentTime };
 
-  // Update live polyline
+  // Update live polyline and markers
   state.pathLine.addLatLng(L.latLng(latitude, longitude));
-
-  // Update endpoint markers
   updatePathMarkers();
-
-  // Update status
   updateStatusBar();
 }
 
@@ -496,6 +570,7 @@ function startRecording() {
   state.coordinates = [];
   state.totalDistance = 0;
   state.lastRecordedCoord = null;
+  state.rejectedPoints = 0;
   state.pathLine.setLatLngs([]);
   updatePathMarkers(); // Remove old markers
 
@@ -551,7 +626,7 @@ function stopRecording() {
     showToast('Not enough points recorded. Try walking further.', 'warning');
   } else {
     showToast(
-      `Recording stopped. ${state.coordinates.length} points, ${formatDistance(state.totalDistance)}.`,
+      `Recording stopped. ${state.coordinates.length} points, ${formatDistance(state.totalDistance)}. (${state.rejectedPoints} glitches filtered)`,
       'success'
     );
   }
@@ -603,6 +678,7 @@ function buildGeoJSON() {
           'stroke-opacity': 0.9,
           distance_meters: Math.round(state.totalDistance),
           points_recorded: state.coordinates.length,
+          points_rejected: state.rejectedPoints,
           recorded_at: now.toISOString(),
         },
         geometry: {
