@@ -795,7 +795,7 @@ function bindDeltaControls() {
     btnExtract.disabled = false;
 
     setDeltaStatus('ready', `Ready to process: ${file.name}`);
-    showToast(`GPX file loaded: ${file.name}`, 'info');
+    showToast(`Track loaded: ${file.name}`, 'info');
   });
 
   // Extract button
@@ -883,7 +883,7 @@ function bindDeltaControls() {
     btnDeltaDownload.disabled = true;
     if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = true;
     btnDeltaClear.disabled = true;
-    setDeltaStatus('', 'Upload a GPX file to begin.');
+    setDeltaStatus('', 'Upload a GPX or GeoJSON file to begin.');
     showToast('Delta layers cleared.', 'info');
   });
 

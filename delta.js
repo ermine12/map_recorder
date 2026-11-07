@@ -27,17 +27,28 @@ var DeltaExtractor = (function () {
   var _lastResult = null;
 
   // ---------------------------------------------------------------------------
-  // 1. parseGPX
+  // 1. Universal Track Parsers (GPX & GeoJSON)
   // ---------------------------------------------------------------------------
+
+  function computeBBoxAndResult(coords) {
+    var north = -Infinity, south = Infinity, east = -Infinity, west = Infinity;
+    for (var i = 0; i < coords.length; i++) {
+      var lng = coords[i][0];
+      var lat = coords[i][1];
+      if (lat > north) north = lat;
+      if (lat < south) south = lat;
+      if (lng > east) east = lng;
+      if (lng < west) west = lng;
+    }
+
+    return {
+      coords: coords,
+      bbox: { north: north, south: south, east: east, west: west }
+    };
+  }
 
   /**
    * Parse a GPX XML string and extract track coordinates + bounding box.
-   *
-   * Multi-segment GPX files are supported: all <trkseg> elements across all
-   * <trk> elements are concatenated into a single coordinate array.
-   *
-   * @param {string} xmlString  Raw GPX XML content.
-   * @returns {{ coords: number[][], bbox: { north: number, south: number, east: number, west: number } }}
    */
   function parseGPX(xmlString) {
     var parser = new DOMParser();
@@ -62,7 +73,7 @@ var DeltaExtractor = (function () {
         var lat = parseFloat(trkpts[p].getAttribute('lat'));
         var lon = parseFloat(trkpts[p].getAttribute('lon'));
         if (!isNaN(lat) && !isNaN(lon)) {
-          coords.push([lon, lat]); // [lng, lat] — GeoJSON order
+          coords.push([lon, lat]); // [lng, lat]
         }
       }
     }
@@ -71,21 +82,75 @@ var DeltaExtractor = (function () {
       throw new Error('GPX file contains no valid track points.');
     }
 
-    // Compute bounding box
-    var north = -Infinity, south = Infinity, east = -Infinity, west = Infinity;
-    for (var i = 0; i < coords.length; i++) {
-      var lng = coords[i][0];
-      var lat2 = coords[i][1];
-      if (lat2 > north) north = lat2;
-      if (lat2 < south) south = lat2;
-      if (lng > east) east = lng;
-      if (lng < west) west = lng;
+    return computeBBoxAndResult(coords);
+  }
+
+  /**
+   * Parse a GeoJSON string or object and extract track coordinates + bounding box.
+   * Handles 2D [lng, lat] and 3D [lng, lat, elevation] coordinates from Organic Maps.
+   */
+  function parseGeoJSON(jsonString) {
+    var data = typeof jsonString === 'string' ? JSON.parse(jsonString) : jsonString;
+    var coords = [];
+
+    function extractFromLine(lineCoords) {
+      if (!Array.isArray(lineCoords)) return;
+      for (var i = 0; i < lineCoords.length; i++) {
+        var pt = lineCoords[i];
+        if (Array.isArray(pt) && pt.length >= 2) {
+          var lng = parseFloat(pt[0]);
+          var lat = parseFloat(pt[1]);
+          if (!isNaN(lng) && !isNaN(lat)) {
+            coords.push([lng, lat]); // Normalized 2D [lng, lat]
+          }
+        }
+      }
     }
 
-    return {
-      coords: coords,
-      bbox: { north: north, south: south, east: east, west: west }
-    };
+    if (data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+      for (var f = 0; f < data.features.length; f++) {
+        var feat = data.features[f];
+        if (feat && feat.geometry) {
+          if (feat.geometry.type === 'LineString') {
+            extractFromLine(feat.geometry.coordinates);
+          } else if (feat.geometry.type === 'MultiLineString') {
+            for (var m = 0; m < feat.geometry.coordinates.length; m++) {
+              extractFromLine(feat.geometry.coordinates[m]);
+            }
+          }
+        }
+      }
+    } else if (data.type === 'Feature' && data.geometry) {
+      if (data.geometry.type === 'LineString') {
+        extractFromLine(data.geometry.coordinates);
+      } else if (data.geometry.type === 'MultiLineString') {
+        for (var m2 = 0; m2 < data.geometry.coordinates.length; m2++) {
+          extractFromLine(data.geometry.coordinates[m2]);
+        }
+      }
+    } else if (data.type === 'LineString') {
+      extractFromLine(data.coordinates);
+    }
+
+    if (coords.length === 0) {
+      throw new Error('GeoJSON file contains no valid LineString track points.');
+    }
+
+    return computeBBoxAndResult(coords);
+  }
+
+  /**
+   * Universal parser: auto-detects GeoJSON vs GPX.
+   */
+  function parseTrack(fileContent, fileName) {
+    var trimmed = (fileContent || '').trim();
+    var isJSON = (fileName && (fileName.toLowerCase().endsWith('.geojson') || fileName.toLowerCase().endsWith('.json'))) ||
+                 trimmed.startsWith('{') || trimmed.startsWith('[');
+
+    if (isJSON) {
+      return parseGeoJSON(trimmed);
+    }
+    return parseGPX(trimmed);
   }
 
   // ---------------------------------------------------------------------------
@@ -462,16 +527,18 @@ var DeltaExtractor = (function () {
     var reader = new FileReader();
 
     reader.onerror = function () {
-      onProgress('error', 'Failed to read the GPX file.');
+      onProgress('error', 'Failed to read the file.');
     };
 
     reader.onload = function (e) {
       try {
-        var xmlString = e.target.result;
+        var contentString = e.target.result;
+        var fileName = (file && file.name) || '';
 
-        // Step 2 — Parse GPX
-        var parsed = parseGPX(xmlString);
-        onProgress('parse', 'GPX parsed: ' + parsed.coords.length + ' points');
+        // Step 2 — Parse GPX or GeoJSON
+        var parsed = parseTrack(contentString, fileName);
+        var typeLabel = fileName.toLowerCase().endsWith('.geojson') || fileName.toLowerCase().endsWith('.json') ? 'GeoJSON' : 'GPX';
+        onProgress('parse', typeLabel + ' parsed: ' + parsed.coords.length + ' points');
 
         // Step 3 — Fetch OSM roads (async)
         fetchOSMRoads(parsed.bbox)
@@ -526,6 +593,8 @@ var DeltaExtractor = (function () {
   return {
     // Core methods
     parseGPX: parseGPX,
+    parseGeoJSON: parseGeoJSON,
+    parseTrack: parseTrack,
     fetchOSMRoads: fetchOSMRoads,
     extractShortcuts: extractShortcuts,
     buildGeoJSON: buildGeoJSON,

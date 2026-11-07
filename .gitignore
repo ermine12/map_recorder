@@ -1,0 +1,85 @@
+# ==============================================================================
+# Shortcut Path Recorder — .gitignore
+# ==============================================================================
+
+# --- Node & Dependencies ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# --- Build & Deployment Outputs ---
+dist/
+build/
+.vercel/
+.output/
+
+# --- Environment & Sensitive Data ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Python & Virtual Environments (for delta_extractor.py) ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+env/
+
+# --- Personal GPS Tracks & Data Exports ---
+# Keeps personal walking traces from accidentally being published to GitHub
+*.gpx
+*.kml
+*.kmz
+walk_track.*
+clean_shortcut.*
+shortcut-path-*.geojson
+delta-shortcuts-*.geojson
+master-shortcuts-*.geojson
+*.log
+
+# --- IDEs, Tooling & Editors ---
+.vscode/
+.idea/
+.qodo/
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
+
+# --- Operating System Artifacts ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
