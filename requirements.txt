@@ -1,0 +1,7 @@
+# Delta Extractor — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+geopandas>=0.14.0
+shapely>=2.0.0
+osmnx>=1.9.0
+gpxpy>=1.6.0

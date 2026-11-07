@@ -113,11 +113,55 @@ html, body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 14px 16px;
-  padding-bottom: max(14px, env(safe-area-inset-bottom));
+  padding: 10px 16px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+}
+
+/* ---- Tab bar ---- */
+#tab-bar {
+  display: flex;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.tab {
+  flex: 1;
+  padding: 8px 6px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.tab.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.tab:active {
+  transform: scale(0.97);
+}
+
+/* ---- Tab panels ---- */
+.tab-panel {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tab-panel.active {
+  display: flex;
 }
 
 .app-title {
@@ -354,4 +398,172 @@ html, body {
 .path-endpoint {
   border: none !important;
   background: none !important;
+}
+
+/* ============================================
+   Delta Extractor Tab Styles
+   ============================================ */
+
+/* ---- File upload row ---- */
+.delta-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-upload {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 10px;
+  background: #6366f1;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.btn-upload:active {
+  transform: scale(0.96);
+}
+
+.file-name {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.file-name.loaded {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* ---- Settings row ---- */
+.delta-settings-row {
+  display: flex;
+  gap: 10px;
+}
+
+.setting-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.setting-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.setting-input-wrap {
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 0 10px;
+}
+
+.setting-input {
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  font-family: inherit;
+  width: 100%;
+  padding: 8px 0;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+
+.setting-input::-webkit-outer-spin-button,
+.setting-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.setting-unit {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.35);
+  margin-left: 4px;
+}
+
+/* ---- Delta status ---- */
+.delta-status {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#delta-status-text {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: center;
+  line-height: 1.4;
+}
+
+.delta-status.processing #delta-status-text {
+  color: #f59e0b;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.delta-status.done #delta-status-text {
+  color: #22c55e;
+}
+
+.delta-status.error #delta-status-text {
+  color: #E51B23;
+}
+
+/* ---- Delta buttons ---- */
+.delta-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-extract {
+  background: #6366f1;
+  color: #ffffff;
+}
+
+.btn-clear {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  flex: 0.6;
+}
+
+/* ---- Delta progress bar ---- */
+.delta-progress-bar {
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.delta-progress-fill {
+  height: 100%;
+  background: #6366f1;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+  width: 0%;
 }

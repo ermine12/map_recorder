@@ -723,12 +723,137 @@ function downloadGeoJSON() {
 // Button Bindings
 // ============================================
 function bindControls() {
+  // Recorder tab buttons
   dom.btnStart.addEventListener('click', startRecording);
   dom.btnStop.addEventListener('click', stopRecording);
   dom.btnFollow.addEventListener('click', toggleAutoFollow);
   dom.btnDownload.addEventListener('click', downloadGeoJSON);
   dom.btnGrantGps.addEventListener('click', onGrantGps);
   dom.btnSkipGps.addEventListener('click', onSkipGps);
+
+  // Tab switching
+  document.querySelectorAll('#tab-bar .tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      // Deactivate all tabs and panels
+      document.querySelectorAll('#tab-bar .tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+
+      // Activate the clicked tab and its panel
+      tab.classList.add('active');
+      const panelId = `tab-${tab.dataset.tab}`;
+      document.getElementById(panelId).classList.add('active');
+    });
+  });
+
+  // Delta Extractor UI wiring
+  bindDeltaControls();
+}
+
+// ============================================
+// Delta Extractor UI Wiring
+// ============================================
+function bindDeltaControls() {
+  const gpxInput = document.getElementById('gpx-file-input');
+  const gpxFileName = document.getElementById('gpx-file-name');
+  const btnExtract = document.getElementById('btn-extract');
+  const btnDeltaDownload = document.getElementById('btn-delta-download');
+  const btnDeltaClear = document.getElementById('btn-delta-clear');
+  const deltaStatus = document.getElementById('delta-status');
+  const deltaStatusText = document.getElementById('delta-status-text');
+  const bufferInput = document.getElementById('delta-buffer');
+  const minLengthInput = document.getElementById('delta-min-length');
+
+  let selectedFile = null;
+
+  // File selection
+  gpxInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    selectedFile = file;
+    gpxFileName.textContent = file.name;
+    gpxFileName.classList.add('loaded');
+    btnExtract.disabled = false;
+
+    setDeltaStatus('ready', `Ready to process: ${file.name}`);
+    showToast(`GPX file loaded: ${file.name}`, 'info');
+  });
+
+  // Extract button
+  btnExtract.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    if (typeof DeltaExtractor === 'undefined') {
+      showToast('Delta Extractor module not loaded.', 'error');
+      return;
+    }
+
+    btnExtract.disabled = true;
+    btnDeltaDownload.disabled = true;
+    btnDeltaClear.disabled = true;
+
+    const bufferMeters = parseFloat(bufferInput.value) || 4.5;
+    const minLengthMeters = parseFloat(minLengthInput.value) || 3.0;
+
+    setDeltaStatus('processing', 'Starting extraction…');
+
+    await DeltaExtractor.run(
+      selectedFile,
+      bufferMeters,
+      minLengthMeters,
+      state.map,
+      (step, message) => {
+        if (step === 'error') {
+          setDeltaStatus('error', message);
+          btnExtract.disabled = false;
+          showToast(message, 'error');
+        } else if (step === 'done') {
+          const result = message;
+          setDeltaStatus(
+            'done',
+            `✅ Found ${result.segmentCount} shortcut(s) — ${Math.round(result.totalLengthMeters)}m total`
+          );
+          btnDeltaDownload.disabled = false;
+          btnDeltaClear.disabled = false;
+          btnExtract.disabled = false;
+          showToast(
+            `Extracted ${result.segmentCount} shortcut(s), ${Math.round(result.totalLengthMeters)}m`,
+            'success'
+          );
+        } else {
+          setDeltaStatus('processing', message);
+        }
+      }
+    );
+  });
+
+  // Download result
+  btnDeltaDownload.addEventListener('click', () => {
+    if (typeof DeltaExtractor !== 'undefined' && DeltaExtractor._lastResult) {
+      DeltaExtractor.downloadGeoJSON(DeltaExtractor._lastResult);
+      showToast('GeoJSON downloaded.', 'success');
+    }
+  });
+
+  // Clear
+  btnDeltaClear.addEventListener('click', () => {
+    if (typeof DeltaExtractor !== 'undefined') {
+      DeltaExtractor.clearMapLayers(state.map);
+    }
+    selectedFile = null;
+    gpxInput.value = '';
+    gpxFileName.textContent = 'No file selected';
+    gpxFileName.classList.remove('loaded');
+    btnExtract.disabled = true;
+    btnDeltaDownload.disabled = true;
+    btnDeltaClear.disabled = true;
+    setDeltaStatus('', 'Upload a GPX file to begin.');
+    showToast('Delta layers cleared.', 'info');
+  });
+
+  function setDeltaStatus(type, text) {
+    deltaStatus.className = `delta-status ${type}`;
+    deltaStatusText.textContent = text;
+  }
 }
 
 // ============================================

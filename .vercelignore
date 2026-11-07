@@ -1,0 +1,7 @@
+# Exclude Python CLI tools from Vercel static deployment
+delta_extractor.py
+requirements.txt
+README.md
+*.gpx
+*.pyc
+__pycache__/

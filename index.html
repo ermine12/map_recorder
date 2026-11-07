@@ -20,7 +20,7 @@
 </head>
 <body>
 
-  <!-- GPS Permission overlay (shown before map loads if needed) -->
+  <!-- GPS Permission overlay -->
   <div id="gps-permission-overlay" class="overlay hidden">
     <div class="overlay-card">
       <div class="overlay-icon">📍</div>
@@ -50,33 +50,80 @@
 
   <!-- Control panel overlay -->
   <div id="controls">
-    <h1 class="app-title">Shortcut Path Recorder</h1>
+    <!-- Tab switcher -->
+    <div id="tab-bar">
+      <button class="tab active" data-tab="recorder">⏺ Recorder</button>
+      <button class="tab" data-tab="extractor">✂️ Delta Extractor</button>
+    </div>
 
-    <!-- Status bar -->
-    <div id="status-bar">
-      <div class="status-item">
-        <span class="status-label">Status</span>
-        <span id="rec-state" class="status-value idle">Idle</span>
+    <!-- ===== RECORDER TAB ===== -->
+    <div id="tab-recorder" class="tab-panel active">
+      <!-- Status bar -->
+      <div id="status-bar">
+        <div class="status-item">
+          <span class="status-label">Status</span>
+          <span id="rec-state" class="status-value idle">Idle</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Time</span>
+          <span id="rec-time" class="status-value">00:00</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Distance</span>
+          <span id="rec-distance" class="status-value">0 m</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Points</span>
+          <span id="rec-points" class="status-value">0</span>
+        </div>
       </div>
-      <div class="status-item">
-        <span class="status-label">Time</span>
-        <span id="rec-time" class="status-value">00:00</span>
-      </div>
-      <div class="status-item">
-        <span class="status-label">Distance</span>
-        <span id="rec-distance" class="status-value">0 m</span>
-      </div>
-      <div class="status-item">
-        <span class="status-label">Points</span>
-        <span id="rec-points" class="status-value">0</span>
+
+      <!-- Action buttons -->
+      <div id="action-buttons">
+        <button id="btn-start" class="btn btn-start">⏺ Start</button>
+        <button id="btn-stop" class="btn btn-stop" disabled>⏹ Stop</button>
+        <button id="btn-download" class="btn btn-download" disabled>⬇ GeoJSON</button>
       </div>
     </div>
 
-    <!-- Action buttons -->
-    <div id="action-buttons">
-      <button id="btn-start" class="btn btn-start">⏺ Start Recording</button>
-      <button id="btn-stop" class="btn btn-stop" disabled>⏹ Stop &amp; Clean</button>
-      <button id="btn-download" class="btn btn-download" disabled>⬇ Download GeoJSON</button>
+    <!-- ===== DELTA EXTRACTOR TAB ===== -->
+    <div id="tab-extractor" class="tab-panel">
+      <!-- GPX upload -->
+      <div class="delta-upload-row">
+        <label for="gpx-file-input" class="btn btn-upload">📂 Load GPX File</label>
+        <input type="file" id="gpx-file-input" accept=".gpx,.xml" hidden>
+        <span id="gpx-file-name" class="file-name">No file selected</span>
+      </div>
+
+      <!-- Buffer & min-length controls -->
+      <div class="delta-settings-row">
+        <div class="setting-group">
+          <label class="setting-label">Road Buffer</label>
+          <div class="setting-input-wrap">
+            <input type="number" id="delta-buffer" value="4.5" min="1" max="20" step="0.5" class="setting-input">
+            <span class="setting-unit">m</span>
+          </div>
+        </div>
+        <div class="setting-group">
+          <label class="setting-label">Min Length</label>
+          <div class="setting-input-wrap">
+            <input type="number" id="delta-min-length" value="3" min="1" max="50" step="1" class="setting-input">
+            <span class="setting-unit">m</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Progress status -->
+      <div id="delta-status" class="delta-status">
+        <span id="delta-status-text">Upload a GPX file to begin.</span>
+      </div>
+
+      <!-- Delta action buttons -->
+      <div class="delta-buttons">
+        <button id="btn-extract" class="btn btn-extract" disabled>✂️ Extract Shortcuts</button>
+        <button id="btn-delta-download" class="btn btn-download" disabled>⬇ Download Result</button>
+        <button id="btn-delta-clear" class="btn btn-clear" disabled>🗑️ Clear</button>
+      </div>
     </div>
   </div>
 
@@ -84,6 +131,12 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
           crossorigin=""></script>
+
+  <!-- Turf.js (geospatial math for Delta Extractor) -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js"></script>
+
+  <!-- Delta Extractor module -->
+  <script src="delta.js"></script>
 
   <!-- App JS -->
   <script src="app.js"></script>
