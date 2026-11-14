@@ -45,6 +45,8 @@ const state = {
   watchId: null,
   isRecording: false,
   coordinates: [],
+  coordinateTimes: [],
+  segmentStarts: [],
   totalDistance: 0,
   pathLine: null,
   lastRecordedCoord: null,       // { lat, lng, time } — includes timestamp for speed calc
@@ -483,6 +485,8 @@ function onPositionUpdate(position) {
   // =============================================
   if (state.coordinates.length === 0) {
     state.coordinates.push([longitude, latitude]);
+    state.coordinateTimes.push(new Date(currentTime).toISOString());
+    state.segmentStarts = [0];
     state.lastRecordedCoord = { lat: latitude, lng: longitude, time: currentTime };
 
     state.pathLine.addLatLng(L.latLng(latitude, longitude));
@@ -500,6 +504,20 @@ function onPositionUpdate(position) {
     latitude,
     longitude
   );
+  const timeElapsedSec = (currentTime - state.lastRecordedCoord.time) / 1000;
+
+  // A long pause or signal gap starts a fresh segment. Never draw a line
+  // through the unseen part of a walk, and resume from the new GPS fix.
+  if (timeElapsedSec > 120 || (dist > CONFIG.maxJumpMeters && timeElapsedSec > 30)) {
+    state.segmentStarts.push(state.coordinates.length);
+    state.coordinates.push([longitude, latitude]);
+    state.coordinateTimes.push(new Date(currentTime).toISOString());
+    state.lastRecordedCoord = { lat: latitude, lng: longitude, time: currentTime };
+    redrawRecordedPath();
+    updatePathMarkers();
+    updateStatusBar();
+    return;
+  }
 
   // =============================================
   // TIER 2: Minimum Movement Threshold (Anti-Jitter)
@@ -525,8 +543,6 @@ function onPositionUpdate(position) {
   // TIER 4: Human Speed Limit (Physics Validation)
   // speed = distance / time; reject if > 8 m/s (~29 km/h)
   // =============================================
-  const timeElapsedSec = (currentTime - state.lastRecordedCoord.time) / 1000;
-
   if (timeElapsedSec > 0) {
     const speedMps = dist / timeElapsedSec;
 
@@ -546,12 +562,31 @@ function onPositionUpdate(position) {
   // =============================================
   state.totalDistance += dist;
   state.coordinates.push([longitude, latitude]);
+  state.coordinateTimes.push(new Date(currentTime).toISOString());
   state.lastRecordedCoord = { lat: latitude, lng: longitude, time: currentTime };
 
   // Update live polyline and markers
-  state.pathLine.addLatLng(L.latLng(latitude, longitude));
+  redrawRecordedPath();
   updatePathMarkers();
   updateStatusBar();
+}
+
+function recordedSegments() {
+  return state.segmentStarts.map((start, index) => {
+    const end = state.segmentStarts[index + 1] ?? state.coordinates.length;
+    return {
+      coordinates: state.coordinates.slice(start, end),
+      times: state.coordinateTimes.slice(start, end)
+    };
+  }).filter(segment => segment.coordinates.length >= 2);
+}
+
+function redrawRecordedPath() {
+  const lines = state.segmentStarts.map((start, index) => {
+    const end = state.segmentStarts[index + 1] ?? state.coordinates.length;
+    return state.coordinates.slice(start, end).map(point => [point[1], point[0]]);
+  });
+  state.pathLine.setLatLngs(lines);
 }
 
 // ============================================
@@ -574,6 +609,8 @@ function startRecording() {
 
   // Clear previous track
   state.coordinates = [];
+  state.coordinateTimes = [];
+  state.segmentStarts = [];
   state.totalDistance = 0;
   state.lastRecordedCoord = null;
   state.rejectedPoints = 0;
@@ -624,15 +661,15 @@ function stopRecording() {
 
   dom.btnStart.disabled = false;
   dom.btnStop.disabled = true;
-  dom.btnDownload.disabled = state.coordinates.length < 2;
+  dom.btnDownload.disabled = recordedSegments().length === 0;
   if (dom.btnSaveRecorderMaster) {
-    dom.btnSaveRecorderMaster.disabled = state.coordinates.length < 2;
+    dom.btnSaveRecorderMaster.disabled = recordedSegments().length === 0;
   }
 
   dom.recState.textContent = 'Stopped';
   dom.recState.className = 'status-value stopped';
 
-  if (state.coordinates.length < 2) {
+  if (recordedSegments().length === 0) {
     showToast('Not enough points recorded. Try walking further.', 'warning');
   } else {
     showToast(
@@ -672,36 +709,37 @@ function toggleAutoFollow() {
 // GeoJSON Export
 // ============================================
 function buildGeoJSON() {
-  const now = new Date();
-  const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const started = new Date(state.recordingStartTime || Date.now());
+  const timestamp = started.toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const name = `shortcut-path-${timestamp}`;
 
   return {
     type: 'FeatureCollection',
-    features: [
+    features: recordedSegments().map((segment, index) => (
       {
         type: 'Feature',
         properties: {
-          name: name,
+          name: `${name}-${index + 1}`,
           stroke: CONFIG.pathColor,
           'stroke-width': CONFIG.pathWeight,
           'stroke-opacity': 0.9,
           distance_meters: Math.round(state.totalDistance),
           points_recorded: state.coordinates.length,
           points_rejected: state.rejectedPoints,
-          recorded_at: now.toISOString(),
+          recorded_at: started.toISOString(),
+          coordTimes: segment.times,
         },
         geometry: {
           type: 'LineString',
-          coordinates: state.coordinates,
+          coordinates: segment.coordinates,
         },
-      },
-    ],
+      }
+    )),
   };
 }
 
 function downloadGeoJSON() {
-  if (state.coordinates.length < 2) {
+  if (recordedSegments().length === 0) {
     showToast('Not enough points to export. Record at least 2 GPS positions.', 'warning');
     return;
   }
@@ -779,22 +817,117 @@ function bindDeltaControls() {
   const btnDeltaClear = document.getElementById('btn-delta-clear');
   const deltaStatus = document.getElementById('delta-status');
   const deltaStatusText = document.getElementById('delta-status-text');
+  const reviewPanel = document.getElementById('delta-review');
+  const reviewList = document.getElementById('delta-review-list');
   const bufferInput = document.getElementById('delta-buffer');
   const minLengthInput = document.getElementById('delta-min-length');
 
   let selectedFile = null;
+  let reviewCandidates = [];
+  const approvedIndexes = new Set();
+
+  function refreshApprovalButtons() {
+    const hasSelection = approvedIndexes.size > 0;
+    btnDeltaDownload.disabled = !hasSelection;
+    if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = !hasSelection;
+  }
+
+  function approvedCollection() {
+    const approvedAt = new Date().toISOString();
+    return {
+      type: 'FeatureCollection',
+      features: reviewCandidates.filter((_, index) => approvedIndexes.has(index)).map(feature => ({
+        type: 'Feature',
+        geometry: feature.geometry,
+        properties: { ...feature.properties, candidate_status: 'approved', approved_at: approvedAt }
+      }))
+    };
+  }
+
+  function clearReview() {
+    reviewCandidates = [];
+    approvedIndexes.clear();
+    reviewList.replaceChildren();
+    reviewPanel.hidden = true;
+    refreshApprovalButtons();
+  }
+
+  function showReview() {
+    clearReview();
+    const result = DeltaExtractor._lastResult;
+    if (!result || !Array.isArray(result.features)) return 0;
+    const master = MasterLayerManager.loadMasterCollection().features;
+    let alreadyRecorded = 0;
+    result.features.forEach((feature) => {
+      const newParts = ShortcutMerger.getNovelSegments(feature, master, 5.0);
+      if (newParts.length === 0) alreadyRecorded++;
+      newParts.forEach(part => reviewCandidates.push(part));
+    });
+    const mapGroup = reviewCandidates.length
+      ? DeltaExtractor.displayOnMap(state.map, reviewCandidates.map(feature => feature.geometry.coordinates), [])
+      : null;
+    const mapLayers = mapGroup ? mapGroup.getLayers() : [];
+    reviewCandidates.forEach((feature, index) => {
+      const props = feature.properties || {};
+      const row = document.createElement('div');
+      row.className = 'delta-review-item';
+      const choice = document.createElement('label');
+      choice.className = 'delta-review-choice';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.setAttribute('aria-label', `Approve proposed path ${index + 1}`);
+      box.addEventListener('change', () => {
+        if (box.checked) approvedIndexes.add(index);
+        else approvedIndexes.delete(index);
+        refreshApprovalButtons();
+      });
+      const description = document.createElement('span');
+      const name = document.createElement('strong');
+      const length = Math.round(turf.length(feature, { units: 'meters' }));
+      name.textContent = `Path ${index + 1} · ${length} m`;
+      description.appendChild(name);
+      const detail = document.createElement('small');
+      const warnings = Array.isArray(props.warning_reasons) ? props.warning_reasons : [];
+      detail.textContent = warnings.length ? `Check carefully: ${warnings.join('; ')}` : 'Check that this is a real, walkable path.';
+      description.appendChild(detail);
+      choice.append(box, description);
+      const show = document.createElement('button');
+      show.type = 'button';
+      show.className = 'delta-review-show';
+      show.textContent = 'Show';
+      show.setAttribute('aria-label', `Show proposed path ${index + 1} on map`);
+      show.addEventListener('click', () => {
+        state.map.fitBounds(mapLayers[index].getBounds(), { padding: [40, 40], maxZoom: 20 });
+        mapLayers.forEach((layer, layerIndex) => {
+          layer.setStyle({ color: layerIndex === index ? '#10b981' : '#ff6b00', weight: layerIndex === index ? 7 : 5 });
+        });
+      });
+      row.append(choice, show);
+      reviewList.appendChild(row);
+    });
+    reviewPanel.hidden = reviewCandidates.length === 0;
+    refreshApprovalButtons();
+    return alreadyRecorded;
+  }
+
+  function loadTrackForReview(file) {
+    selectedFile = file;
+    DeltaExtractor.clearMapLayers(state.map);
+    gpxFileName.textContent = file.name;
+    gpxFileName.classList.add('loaded');
+    clearReview();
+    btnExtract.disabled = false;
+    setDeltaStatus('ready', `Ready to process: ${file.name}`);
+    document.querySelector('#tab-bar [data-tab="extractor"]').click();
+  }
+  window.openTrackForReview = loadTrackForReview;
 
   // File selection
   gpxInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    selectedFile = file;
-    gpxFileName.textContent = file.name;
-    gpxFileName.classList.add('loaded');
-    btnExtract.disabled = false;
-
-    setDeltaStatus('ready', `Ready to process: ${file.name}`);
+    loadTrackForReview(file);
     showToast(`Track loaded: ${file.name}`, 'info');
   });
 
@@ -807,8 +940,7 @@ function bindDeltaControls() {
     }
 
     btnExtract.disabled = true;
-    btnDeltaDownload.disabled = true;
-    if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = true;
+    clearReview();
     btnDeltaClear.disabled = true;
 
     const bufferMeters = parseFloat(bufferInput.value) || 4.5;
@@ -825,32 +957,27 @@ function bindDeltaControls() {
         if (step === 'error') {
           setDeltaStatus('error', message);
           btnExtract.disabled = false;
+          btnDeltaClear.disabled = false;
           showToast(message, 'error');
         } else if (step === 'done') {
           const result = message;
-          if (result.segmentCount === 0) {
+          const alreadyRecorded = showReview();
+          if (reviewCandidates.length === 0) {
             setDeltaStatus(
               'done',
-              '⚠️ Entire track overlaps with existing OSM roads (no new shortcuts found).'
+              alreadyRecorded ? 'No new paths: proposed pieces are already in the master.' : 'No candidate paths found outside mapped roads.'
             );
-            btnDeltaDownload.disabled = true;
-            if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = true;
             btnDeltaClear.disabled = false;
             btnExtract.disabled = false;
-            showToast('All track segments overlap with known OSM roads.', 'info');
+            showToast('No new path candidates to review.', 'info');
           } else {
             setDeltaStatus(
               'done',
-              `✅ Found ${result.segmentCount} shortcut(s) — ${Math.round(result.totalLengthMeters)}m total`
+              `${reviewCandidates.length} proposed path(s) to review${alreadyRecorded ? `; ${alreadyRecorded} already recorded` : ''}. Select only the real paths.`
             );
-            btnDeltaDownload.disabled = false;
-            if (btnSaveDeltaMaster) btnSaveDeltaMaster.disabled = false;
             btnDeltaClear.disabled = false;
             btnExtract.disabled = false;
-            showToast(
-              `Extracted ${result.segmentCount} shortcut(s), ${Math.round(result.totalLengthMeters)}m`,
-              'success'
-            );
+            showToast(`Review ${reviewCandidates.length} candidate path(s) before saving.`, 'info');
           }
         } else {
           setDeltaStatus('processing', message);
@@ -862,23 +989,27 @@ function bindDeltaControls() {
   // Save delta result to Master Layer with intelligent deduplication
   if (btnSaveDeltaMaster) {
     btnSaveDeltaMaster.addEventListener('click', () => {
-      if (typeof DeltaExtractor !== 'undefined' && DeltaExtractor._lastResult && typeof MasterLayerManager !== 'undefined') {
-        const importRes = MasterLayerManager.importGeoJSON(DeltaExtractor._lastResult, 5.0);
-        showToast(
-          `Master updated: +${importRes.addedCount} new, 🔄 ${importRes.reinforcedCount} reinforced.`,
-          'success'
-        );
-        btnSaveDeltaMaster.disabled = true;
+      if (!approvedIndexes.size) return;
+      try {
+        const importRes = MasterLayerManager.importGeoJSON(approvedCollection(), 5.0);
+        showToast(importRes.addedCount
+          ? `Master updated with ${importRes.addedCount} new path piece(s).`
+          : 'Those path pieces are already in the master.', importRes.addedCount ? 'success' : 'info');
+        approvedIndexes.clear();
+        reviewList.querySelectorAll('input').forEach(input => { input.checked = false; });
+        refreshApprovalButtons();
         updateMasterStatsUI();
+      } catch (err) {
+        showToast(`Master save failed: ${err.message}`, 'error');
       }
     });
   }
 
   // Download result
   btnDeltaDownload.addEventListener('click', () => {
-    if (typeof DeltaExtractor !== 'undefined' && DeltaExtractor._lastResult) {
-      DeltaExtractor.downloadGeoJSON(DeltaExtractor._lastResult);
-      showToast('GeoJSON downloaded.', 'success');
+    if (approvedIndexes.size) {
+      DeltaExtractor.downloadGeoJSON(approvedCollection());
+      showToast('Approved GeoJSON downloaded.', 'success');
     }
   });
 
@@ -888,6 +1019,7 @@ function bindDeltaControls() {
       DeltaExtractor.clearMapLayers(state.map);
     }
     selectedFile = null;
+    clearReview();
     gpxInput.value = '';
     gpxFileName.textContent = 'No file selected';
     gpxFileName.classList.remove('loaded');
@@ -911,6 +1043,11 @@ function bindDeltaControls() {
 function updateMasterStatsUI() {
   if (typeof MasterLayerManager === 'undefined') return;
   const stats = MasterLayerManager.getStats();
+  const legacyNote = document.getElementById('master-legacy-note');
+  if (legacyNote) {
+    const features = MasterLayerManager.loadMasterCollection().features;
+    legacyNote.hidden = !features.some(feature => feature.properties?.candidate_status !== 'approved');
+  }
 
   const elCount = document.getElementById('master-count');
   const elDist = document.getElementById('master-distance');
@@ -918,7 +1055,7 @@ function updateMasterStatsUI() {
 
   if (elCount) elCount.textContent = stats.totalShortcuts;
   if (elDist) elDist.textContent = formatDistance(stats.totalDistanceMeters);
-  if (elWalks) elWalks.textContent = stats.totalWalks;
+  if (elWalks) elWalks.textContent = stats.totalWalks ?? '—';
 }
 
 function bindMasterControls() {
@@ -931,61 +1068,26 @@ function bindMasterControls() {
   // Initial stats render
   updateMasterStatsUI();
 
-  // Save live recorded path to Master Layer (deduplicated)
+  // Send live recordings through the same OSM and master review as uploads.
   if (btnSaveRecorderMaster) {
     btnSaveRecorderMaster.addEventListener('click', () => {
-      if (state.coordinates.length < 2) {
+      if (recordedSegments().length === 0) {
         showToast('Not enough points to save.', 'warning');
         return;
       }
-      if (typeof MasterLayerManager === 'undefined') return;
-
-      const singleFeature = {
-        type: 'Feature',
-        geometry: {
-          type: 'LineString',
-          coordinates: state.coordinates
-        },
-        properties: {
-          name: `shortcut-${new Date().toISOString().slice(0, 10)}`,
-          distance_meters: Math.round(state.totalDistance),
-          points_recorded: state.coordinates.length
-        }
-      };
-
-      const res = MasterLayerManager.addShortcut(singleFeature, 5.0);
-      if (res.action === 'reinforced') {
-        showToast(`🔄 Reinforced existing ${res.name} (walked ${res.timesWalked}x)!`, 'success');
-      } else {
-        showToast(`✨ Saved as new ${res.name} in Master Layer!`, 'success');
-      }
-
-      btnSaveRecorderMaster.disabled = true;
-      updateMasterStatsUI();
+      const recording = buildGeoJSON();
+      const file = new File([JSON.stringify(recording)], `recording-${recording.features[0].properties.recorded_at}.geojson`, { type: 'application/geo+json' });
+      window.openTrackForReview(file);
+      showToast('Recording ready for OSM comparison and review.', 'info');
     });
   }
 
-  // Import Past GeoJSON (with automatic deduplication)
+  // Past GeoJSON follows the same review flow; direct import skips OSM.
   if (masterImportInput) {
     masterImportInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const json = JSON.parse(event.target.result);
-          const res = MasterLayerManager.importGeoJSON(json, 5.0);
-          showToast(
-            `Imported: +${res.addedCount} new shortcuts, 🔄 ${res.reinforcedCount} reinforced duplicates.`,
-            'success'
-          );
-          updateMasterStatsUI();
-        } catch (err) {
-          showToast('Invalid GeoJSON file.', 'error');
-        }
-      };
-      reader.readAsText(file);
+      window.openTrackForReview(file);
       masterImportInput.value = '';
     });
   }

@@ -46,6 +46,7 @@ var MasterLayerManager = (function () {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(collection));
     } catch (e) {
       console.error('[MasterLayer] Failed to save to localStorage:', e);
+      throw new Error('Browser storage is full or unavailable. Export a backup and try again.');
     }
   }
 
@@ -110,6 +111,7 @@ var MasterLayerManager = (function () {
     return {
       addedCount: result.addedCount,
       reinforcedCount: result.reinforcedCount,
+      unchangedCount: result.unchangedCount,
       totalShortcuts: collection.features.length
     };
   }
@@ -121,7 +123,7 @@ var MasterLayerManager = (function () {
   function getStats() {
     var collection = loadMasterCollection();
     var totalDist = 0;
-    var totalWalks = 0;
+    var sources = new Set();
 
     for (var i = 0; i < collection.features.length; i++) {
       var feat = collection.features[i];
@@ -131,13 +133,14 @@ var MasterLayerManager = (function () {
           totalDist += len;
         } catch (e) {}
       }
-      totalWalks += (feat.properties && feat.properties.times_walked) || 1;
+      var props = feat.properties || {};
+      (Array.isArray(props.source_ids) ? props.source_ids : []).forEach(function (id) { sources.add(id); });
     }
 
     return {
       totalShortcuts: collection.features.length,
       totalDistanceMeters: Math.round(totalDist),
-      totalWalks: totalWalks
+      totalWalks: sources.size || null
     };
   }
 
@@ -182,13 +185,17 @@ var MasterLayerManager = (function () {
         lineJoin: 'round'
       });
 
-      var popupContent =
-        '<strong>' + (props.name || 'Shortcut') + '</strong><br>' +
-        '📏 Length: ' + (props.length_meters || Math.round(turf.length(feat, { units: 'meters' }))) + ' m<br>' +
-        '🚶 Walked: ' + walks + ' time' + (walks > 1 ? 's' : '') + '<br>' +
-        '<small>Last: ' + (props.last_walked_at ? props.last_walked_at.slice(0, 10) : 'Today') + '</small>';
-
-      polyline.bindPopup(popupContent);
+      var popup = document.createElement('div');
+      var title = document.createElement('strong');
+      title.textContent = props.name || 'Shortcut';
+      popup.appendChild(title);
+      var info = document.createElement('div');
+      info.textContent = 'Length: ' + (props.length_meters || Math.round(turf.length(feat, { units: 'meters' }))) + ' m';
+      popup.appendChild(info);
+      var observed = document.createElement('div');
+      observed.textContent = 'Source observations: ' + walks;
+      popup.appendChild(observed);
+      polyline.bindPopup(popup);
       _layerGroup.addLayer(polyline);
     }
   }

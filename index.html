@@ -83,7 +83,7 @@
       <div id="action-buttons">
         <button id="btn-start" class="btn btn-start">⏺ Start</button>
         <button id="btn-stop" class="btn btn-stop" disabled>⏹ Stop</button>
-        <button id="btn-save-recorder-master" class="btn btn-master-save" disabled title="Merge into Master Layer">💾 Save to Master</button>
+        <button id="btn-save-recorder-master" class="btn btn-master-save" disabled title="Compare this recording with OSM before saving">🔎 Review for Master</button>
         <button id="btn-download" class="btn btn-download" disabled>⬇ GeoJSON</button>
       </div>
     </div>
@@ -120,11 +120,16 @@
         <span id="delta-status-text">Upload a GPX file to begin.</span>
       </div>
 
+      <div id="delta-review" class="delta-review" hidden>
+        <p>Review each proposed path before adding it to the master. Unchecked paths stay out of exports and the master.</p>
+        <div id="delta-review-list" class="delta-review-list"></div>
+      </div>
+
       <!-- Delta action buttons -->
       <div class="delta-buttons">
         <button id="btn-extract" class="btn btn-extract" disabled>✂️ Extract</button>
-        <button id="btn-save-delta-master" class="btn btn-master-save" disabled title="Merge into Master Layer">💾 Save to Master</button>
-        <button id="btn-delta-download" class="btn btn-download" disabled>⬇ GeoJSON</button>
+        <button id="btn-save-delta-master" class="btn btn-master-save" disabled title="Add approved paths to Master Layer">💾 Save Approved</button>
+        <button id="btn-delta-download" class="btn btn-download" disabled>⬇ Approved GeoJSON</button>
         <button id="btn-delta-clear" class="btn btn-clear" disabled>🗑️ Clear</button>
       </div>
     </div>
@@ -143,9 +148,10 @@
         </div>
         <div class="master-stat-card">
           <span class="stat-number" id="master-walks">0</span>
-          <span class="stat-title">Walks Logged</span>
+          <span class="stat-title">Source Walks</span>
         </div>
       </div>
+      <p id="master-legacy-note" class="master-legacy-note" hidden>Some saved paths predate the review checks. Export a backup, clear the master, then process the original recordings in Delta to rebuild it.</p>
 
       <!-- Visibility toggle row -->
       <div class="master-toggle-row">
@@ -157,7 +163,7 @@
 
       <!-- Master actions -->
       <div class="master-actions-row">
-        <label for="master-import-input" class="btn btn-upload master-btn">📂 Import Past GeoJSON</label>
+        <label for="master-import-input" class="btn btn-upload master-btn">📂 Review Past GeoJSON</label>
         <input type="file" id="master-import-input" accept=".geojson,.json" hidden>
         <button id="btn-export-master" class="btn btn-download master-btn">⬇ Export Clean Master</button>
         <button id="btn-clear-master" class="btn btn-clear" title="Clear Master Layer">🗑️</button>

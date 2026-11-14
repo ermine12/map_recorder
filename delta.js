@@ -30,7 +30,12 @@ var DeltaExtractor = (function () {
   // 1. Universal Track Parsers (GPX & GeoJSON)
   // ---------------------------------------------------------------------------
 
-  function computeBBoxAndResult(coords) {
+  function computeBBoxAndResult(segments) {
+    var coords = [];
+    for (var s = 0; s < segments.length; s++) {
+      for (var p = 0; p < segments[s].coords.length; p++) coords.push(segments[s].coords[p]);
+    }
+    if (!coords.length) throw new Error('The recording contains no valid track points.');
     var north = -Infinity, south = Infinity, east = -Infinity, west = Infinity;
     for (var i = 0; i < coords.length; i++) {
       var lng = coords[i][0];
@@ -43,6 +48,7 @@ var DeltaExtractor = (function () {
 
     return {
       coords: coords,
+      segments: segments,
       bbox: { north: north, south: south, east: east, west: west }
     };
   }
@@ -60,7 +66,7 @@ var DeltaExtractor = (function () {
       throw new Error('Invalid GPX file: ' + parseError.textContent);
     }
 
-    var coords = [];
+    var tracks = [];
     var segments = doc.querySelectorAll('trkseg');
 
     if (segments.length === 0) {
@@ -69,20 +75,20 @@ var DeltaExtractor = (function () {
 
     for (var s = 0; s < segments.length; s++) {
       var trkpts = segments[s].querySelectorAll('trkpt');
+      var coords = [], times = [];
       for (var p = 0; p < trkpts.length; p++) {
         var lat = parseFloat(trkpts[p].getAttribute('lat'));
         var lon = parseFloat(trkpts[p].getAttribute('lon'));
-        if (!isNaN(lat) && !isNaN(lon)) {
+        if (isFinite(lat) && isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
           coords.push([lon, lat]); // [lng, lat]
+          var timeNode = trkpts[p].querySelector('time');
+          var time = timeNode ? Date.parse(timeNode.textContent) : NaN;
+          times.push(isFinite(time) ? time : null);
         }
       }
+      if (coords.length) tracks.push({ coords: coords, times: times });
     }
-
-    if (coords.length === 0) {
-      throw new Error('GPX file contains no valid track points.');
-    }
-
-    return computeBBoxAndResult(coords);
+    return computeBBoxAndResult(tracks);
   }
 
   /**
@@ -91,52 +97,54 @@ var DeltaExtractor = (function () {
    */
   function parseGeoJSON(jsonString) {
     var data = typeof jsonString === 'string' ? JSON.parse(jsonString) : jsonString;
-    var coords = [];
+    var segments = [];
 
-    function extractFromLine(lineCoords) {
+    function extractFromLine(lineCoords, coordTimes) {
       if (!Array.isArray(lineCoords)) return;
+      var coords = [], times = [];
       for (var i = 0; i < lineCoords.length; i++) {
         var pt = lineCoords[i];
         if (Array.isArray(pt) && pt.length >= 2) {
           var lng = parseFloat(pt[0]);
           var lat = parseFloat(pt[1]);
-          if (!isNaN(lng) && !isNaN(lat)) {
+          if (isFinite(lng) && isFinite(lat) && Math.abs(lng) <= 180 && Math.abs(lat) <= 90) {
             coords.push([lng, lat]); // Normalized 2D [lng, lat]
+            var time = Array.isArray(coordTimes) && coordTimes[i] ? Date.parse(coordTimes[i]) : NaN;
+            times.push(isFinite(time) ? time : null);
           }
+        }
+      }
+      if (coords.length) segments.push({ coords: coords, times: times });
+    }
+
+    function extractFeature(feat) {
+      if (!feat || !feat.geometry) return;
+      var geometry = feat.geometry;
+      var times = feat.properties && feat.properties.coordTimes;
+      if (geometry.type === 'LineString') {
+        extractFromLine(geometry.coordinates, times);
+      } else if (geometry.type === 'MultiLineString') {
+        for (var m = 0; m < geometry.coordinates.length; m++) {
+          extractFromLine(geometry.coordinates[m], Array.isArray(times) ? times[m] : null);
         }
       }
     }
 
     if (data.type === 'FeatureCollection' && Array.isArray(data.features)) {
       for (var f = 0; f < data.features.length; f++) {
-        var feat = data.features[f];
-        if (feat && feat.geometry) {
-          if (feat.geometry.type === 'LineString') {
-            extractFromLine(feat.geometry.coordinates);
-          } else if (feat.geometry.type === 'MultiLineString') {
-            for (var m = 0; m < feat.geometry.coordinates.length; m++) {
-              extractFromLine(feat.geometry.coordinates[m]);
-            }
-          }
-        }
+        extractFeature(data.features[f]);
       }
     } else if (data.type === 'Feature' && data.geometry) {
-      if (data.geometry.type === 'LineString') {
-        extractFromLine(data.geometry.coordinates);
-      } else if (data.geometry.type === 'MultiLineString') {
-        for (var m2 = 0; m2 < data.geometry.coordinates.length; m2++) {
-          extractFromLine(data.geometry.coordinates[m2]);
-        }
-      }
+      extractFeature(data);
     } else if (data.type === 'LineString') {
-      extractFromLine(data.coordinates);
+      extractFromLine(data.coordinates, null);
     }
 
-    if (coords.length === 0) {
+    if (segments.length === 0) {
       throw new Error('GeoJSON file contains no valid LineString track points.');
     }
 
-    return computeBBoxAndResult(coords);
+    return computeBBoxAndResult(segments);
   }
 
   /**
@@ -193,8 +201,10 @@ var DeltaExtractor = (function () {
       'https://overpass.kumi.systems/api/interpreter'
     ];
 
-    // Race mirrors in parallel: the fastest successful response wins immediately!
+    // Race complete, non-empty responses. An empty result needs corroboration;
+    // a timed-out Overpass query can otherwise look like an unmapped area.
     var abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var emptyResponses = 0;
 
     var requests = servers.map(function (serverUrl) {
       var fetchOptions = {
@@ -212,10 +222,33 @@ var DeltaExtractor = (function () {
             throw new Error(serverUrl + ' HTTP ' + res.status);
           }
           return res.json();
+        })
+        .then(function (data) {
+          if (!data || !Array.isArray(data.elements) || data.remark ||
+              data.elements.some(function (element) { return element && element.type === 'remark'; })) {
+            throw new Error(serverUrl + ' returned an incomplete OSM response');
+          }
+          if (!data.elements.some(function (element) { return element.type === 'way'; })) {
+            emptyResponses++;
+            throw new Error(serverUrl + ' found no ways');
+          }
+          var nodeIds = new Set(data.elements.filter(function (element) { return element.type === 'node'; })
+            .map(function (element) { return element.id; }));
+          if (data.elements.some(function (element) {
+            return element.type === 'way' && (!Array.isArray(element.nodes) || element.nodes.length < 2 ||
+              element.nodes.some(function (id) { return !nodeIds.has(id); }));
+          })) {
+            throw new Error(serverUrl + ' omitted road coordinates');
+          }
+          return data;
         });
     });
 
     return Promise.any(requests)
+      .catch(function () {
+        if (emptyResponses >= 2) return { elements: [] };
+        throw new Error('OpenStreetMap lookup failed or returned incomplete data.');
+      })
       .then(function (data) {
         // Abort the slower pending requests
         if (abortController) {
@@ -224,7 +257,7 @@ var DeltaExtractor = (function () {
 
         // Build a lookup map:  nodeId → [lng, lat]
         var nodeLookup = {};
-        var elements = data.elements || [];
+        var elements = data.elements;
         for (var i = 0; i < elements.length; i++) {
           var el = elements[i];
           if (el.type === 'node') {
@@ -262,98 +295,162 @@ var DeltaExtractor = (function () {
   // 3. extractShortcuts
   // ---------------------------------------------------------------------------
 
-  /**
-   * Compare every point in the GPX track against the set of OSM roads and
-   * extract consecutive off-road segments that exceed a minimum length.
-   *
-   * @param {number[][]} trackCoords         Array of [lng, lat] from GPX.
-   * @param {number[][][]} roadCoordArrays   Array of road LineStrings from OSM.
-   * @param {number} bufferMeters            Distance threshold (meters). Points
-   *                                         closer than this to any road are "on-road".
-   * @param {number} minLengthMeters         Minimum segment length to keep.
-   * @returns {number[][][]}  Array of shortcut LineString coordinate arrays.
-   */
-  function extractShortcuts(trackCoords, roadCoordArrays, bufferMeters, minLengthMeters) {
-    // Pre-compute rough bounding boxes for each road for fast rejection
-    var roadBboxes = [];
-    var roadLines = [];
+  function distanceMeters(a, b) {
+    var rad = Math.PI / 180, dLat = (b[1] - a[1]) * rad, dLon = (b[0] - a[0]) * rad;
+    var h = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * rad) * Math.cos(b[1] * rad) * Math.sin(dLon / 2) ** 2;
+    return 12742017.6 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+
+  function interpolate(a, b, fraction) {
+    return [a[0] + (b[0] - a[0]) * fraction, a[1] + (b[1] - a[1]) * fraction];
+  }
+
+  // Treat long pauses as gaps, not as a straight line connecting two fixes.
+  // Quality flags remain attached to the original observations for review.
+  function splitTrackSegments(sourceSegments) {
+    var output = [], warnings = [];
+    for (var s = 0; s < sourceSegments.length; s++) {
+      var source = sourceSegments[s], coords = source.coords, times = source.times || [];
+      var tangled = new Set();
+      for (var start = 0; start + 20 <= coords.length; start++) {
+        var window = coords.slice(start, start + 20);
+        var length = 0, west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+        for (var w = 0; w < window.length; w++) {
+          var point = window[w];
+          west = Math.min(west, point[0]); east = Math.max(east, point[0]);
+          south = Math.min(south, point[1]); north = Math.max(north, point[1]);
+          if (w) length += distanceMeters(window[w - 1], point);
+        }
+        var diagonal = distanceMeters([west, south], [east, north]);
+        if (length >= 180 && diagonal <= 110 && length / Math.max(diagonal, 1) >= 3.5) {
+          for (var q = start; q < start + 20; q++) tangled.add(q);
+        }
+      }
+      var chunkStart = 0, pendingGap = false;
+      function addChunk(end) {
+        if (end - chunkStart < 2) {
+          warnings.push('Track ' + (s + 1) + ' has an isolated point at ' + chunkStart + '; no line was drawn across the gap');
+          return;
+        }
+        var reasons = [];
+        if (pendingGap) reasons.push('Recording resumed after a long time gap');
+        if (Array.from(tangled).some(function (index) { return index >= chunkStart && index < end; })) {
+          reasons.push('Repeated movement within a small area; check for GPS drift');
+        }
+        output.push({ coords: coords.slice(chunkStart, end), times: times.slice(chunkStart, end),
+          sourceSegment: s, startIndex: chunkStart, endIndex: end - 1,
+          startedAt: times[chunkStart] == null ? null : new Date(times[chunkStart]).toISOString(),
+          endedAt: times[end - 1] == null ? null : new Date(times[end - 1]).toISOString(),
+          tangledIndices: Array.from(tangled).filter(function (index) { return index >= chunkStart && index < end; }),
+          warningReasons: reasons });
+      }
+      for (var i = 1; i < coords.length; i++) {
+        var elapsed = times[i] != null && times[i - 1] != null ? times[i] - times[i - 1] : null;
+        var speed = elapsed > 0 ? distanceMeters(coords[i - 1], coords[i]) / (elapsed / 1000) : null;
+        var timeGap = elapsed != null && (elapsed > 120000 || elapsed <= 0);
+        var badSpeed = speed != null && speed > 10;
+        var tangleBoundary = tangled.has(i) !== tangled.has(i - 1);
+        if (timeGap || badSpeed || tangleBoundary) {
+          addChunk(i);
+          warnings.push('Track ' + (s + 1) + ' split at point ' + i +
+            (timeGap && elapsed > 120000 ? ' after a ' + Math.round(elapsed / 1000) + ' s pause' :
+              badSpeed ? ' after an implausible GPS update' : ' at a tangled section'));
+          chunkStart = i;
+          pendingGap = timeGap || badSpeed;
+        }
+      }
+      addChunk(coords.length);
+      if (tangled.size) warnings.push('Track ' + (s + 1) + ' contains repeated movement in a small area');
+    }
+    return { segments: output, warnings: warnings };
+  }
+
+  function extractDetailed(sourceSegments, roadCoordArrays, bufferMeters, minLengthMeters) {
+    var roads = [];
     for (var r = 0; r < roadCoordArrays.length; r++) {
       var rc = roadCoordArrays[r];
-      var rNorth = -Infinity, rSouth = Infinity, rEast = -Infinity, rWest = Infinity;
+      if (!Array.isArray(rc) || rc.length < 2) continue;
+      var west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
       for (var n = 0; n < rc.length; n++) {
-        if (rc[n][1] > rNorth) rNorth = rc[n][1];
-        if (rc[n][1] < rSouth) rSouth = rc[n][1];
-        if (rc[n][0] > rEast) rEast = rc[n][0];
-        if (rc[n][0] < rWest) rWest = rc[n][0];
+        west = Math.min(west, rc[n][0]); east = Math.max(east, rc[n][0]);
+        south = Math.min(south, rc[n][1]); north = Math.max(north, rc[n][1]);
       }
-      // Expand bbox by a rough degree equivalent of bufferMeters (~111,000 m per degree)
-      var degBuffer = bufferMeters / 111000;
-      roadBboxes.push({
-        north: rNorth + degBuffer,
-        south: rSouth - degBuffer,
-        east: rEast + degBuffer,
-        west: rWest - degBuffer
-      });
-      roadLines.push(turf.lineString(rc));
+      roads.push({ line: turf.lineString(rc), west: west, east: east, south: south, north: north });
     }
-
-    // Classify each track point as on-road or off-road
-    var offRoadFlags = new Array(trackCoords.length);
-    for (var i = 0; i < trackCoords.length; i++) {
-      var pt = turf.point(trackCoords[i]);
-      var lng = trackCoords[i][0];
-      var lat = trackCoords[i][1];
-      var isOnRoad = false;
-
-      for (var j = 0; j < roadLines.length; j++) {
-        // Quick bbox rejection
-        var rb = roadBboxes[j];
-        if (lat < rb.south || lat > rb.north || lng < rb.west || lng > rb.east) {
-          continue;
-        }
-        // Precise distance check
-        var dist = turf.pointToLineDistance(pt, roadLines[j], { units: 'meters' });
-        if (dist <= bufferMeters) {
-          isOnRoad = true;
-          break;
-        }
+    function onRoad(coord) {
+      var latPad = bufferMeters / 111000;
+      var lonPad = latPad / Math.max(Math.cos(coord[1] * Math.PI / 180), 0.1);
+      for (var j = 0; j < roads.length; j++) {
+        var road = roads[j];
+        if (coord[1] < road.south - latPad || coord[1] > road.north + latPad ||
+            coord[0] < road.west - lonPad || coord[0] > road.east + lonPad) continue;
+        if (turf.pointToLineDistance(turf.point(coord), road.line, { units: 'meters' }) <= bufferMeters) return true;
       }
-
-      offRoadFlags[i] = !isOnRoad;
+      return false;
     }
-
-    // Group consecutive off-road points into segments
-    var segments = [];
-    var currentSegment = null;
-    for (var k = 0; k < offRoadFlags.length; k++) {
-      if (offRoadFlags[k]) {
-        if (!currentSegment) {
-          currentSegment = [];
-        }
-        currentSegment.push(trackCoords[k]);
-      } else {
-        if (currentSegment && currentSegment.length >= 2) {
-          segments.push(currentSegment);
-        }
-        currentSegment = null;
+    function boundary(a, b, aOnRoad) {
+      var left = 0, right = 1;
+      for (var k = 0; k < 10; k++) {
+        var middle = (left + right) / 2;
+        if (onRoad(interpolate(a, b, middle)) === aOnRoad) left = middle;
+        else right = middle;
       }
+      return interpolate(a, b, (left + right) / 2);
     }
-    // Don't forget the last segment
-    if (currentSegment && currentSegment.length >= 2) {
-      segments.push(currentSegment);
-    }
-
-    // Filter by minimum length
     var result = [];
-    for (var m = 0; m < segments.length; m++) {
-      var line = turf.lineString(segments[m]);
-      var lengthM = turf.length(line, { units: 'meters' });
-      if (lengthM >= minLengthMeters) {
-        result.push(segments[m]);
+    for (var s = 0; s < sourceSegments.length; s++) {
+      var source = sourceSegments[s], track = source.coords;
+      if (track.length < 2) continue;
+      var samples = [track[0]], sampleOrigins = [source.startIndex || 0];
+      for (var i = 1; i < track.length; i++) {
+        var count = Math.max(1, Math.ceil(distanceMeters(track[i - 1], track[i]) / 2));
+        for (var step = 1; step <= count; step++) {
+          samples.push(interpolate(track[i - 1], track[i], step / count));
+          sampleOrigins.push((source.startIndex || 0) + i - 1 + step / count);
+        }
       }
+      var current = null, currentStart = null, currentEnd = null, previousOnRoad = onRoad(samples[0]);
+      function finish() {
+        if (current && current.length >= 2 && turf.length(turf.lineString(current), { units: 'meters' }) >= minLengthMeters) {
+          var from = Math.floor(currentStart), to = Math.ceil(currentEnd);
+          var reasons = (source.warningReasons || []).slice();
+          if ((source.tangledIndices || []).some(function (index) { return index >= from && index <= to; })) {
+            reasons.push('Repeated movement within a small area; check for GPS drift');
+          }
+          result.push({ coords: current, sourceSegment: source.sourceSegment,
+            startIndex: from, endIndex: to,
+            startedAt: source.startedAt, endedAt: source.endedAt,
+            warningReasons: reasons });
+        }
+        current = null; currentStart = null; currentEnd = null;
+      }
+      for (var k = 1; k < samples.length; k++) {
+        var before = samples[k - 1], after = samples[k], nextOnRoad = onRoad(after);
+        if (!previousOnRoad && !nextOnRoad) {
+          if (!current) { current = [before]; currentStart = sampleOrigins[k - 1]; }
+          current.push(after);
+          currentEnd = sampleOrigins[k];
+        } else if (!previousOnRoad && nextOnRoad) {
+          if (!current) { current = [before]; currentStart = sampleOrigins[k - 1]; }
+          current.push(boundary(before, after, false));
+          currentEnd = sampleOrigins[k];
+          finish();
+        } else if (previousOnRoad && !nextOnRoad) {
+          current = [boundary(before, after, true), after];
+          currentStart = sampleOrigins[k - 1]; currentEnd = sampleOrigins[k];
+        }
+        previousOnRoad = nextOnRoad;
+      }
+      finish();
     }
-
     return result;
+  }
+
+  // Retain the historical API for callers that pass a single coordinate list.
+  function extractShortcuts(trackCoords, roadCoordArrays, bufferMeters, minLengthMeters) {
+    var segments = Array.isArray(trackCoords[0]) ? [{ coords: trackCoords, sourceSegment: 0,
+      startIndex: 0, endIndex: trackCoords.length - 1, warningReasons: [] }] : trackCoords;
+    return extractDetailed(segments, roadCoordArrays, bufferMeters, minLengthMeters).map(function (item) { return item.coords; });
   }
 
   // ---------------------------------------------------------------------------
@@ -367,12 +464,24 @@ var DeltaExtractor = (function () {
    * @param {number} bufferMeters            Buffer distance used during extraction.
    * @returns {object}  GeoJSON FeatureCollection.
    */
-  function buildGeoJSON(shortcutSegments, bufferMeters) {
+  function hashString(value) {
+    var hash = 2166136261;
+    for (var i = 0; i < value.length; i++) {
+      hash ^= value.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+
+  function buildGeoJSON(shortcutSegments, bufferMeters, options) {
+    options = options || {};
     var now = new Date().toISOString();
     var features = [];
 
     for (var i = 0; i < shortcutSegments.length; i++) {
-      var coords = shortcutSegments[i];
+      var segment = shortcutSegments[i];
+      var coords = Array.isArray(segment) ? segment : segment.coords;
+      var warningReasons = Array.isArray(segment.warningReasons) ? segment.warningReasons : [];
       var line = turf.lineString(coords);
       var lengthM = turf.length(line, { units: 'meters' });
 
@@ -390,7 +499,16 @@ var DeltaExtractor = (function () {
           'stroke-width': 4,
           'stroke-opacity': 0.9,
           buffer_meters: bufferMeters,
-          length_meters: Math.round(lengthM * 100) / 100
+          length_meters: Math.round(lengthM * 100) / 100,
+          source_id: options.sourceId || null,
+          source_segment: segment.sourceSegment == null ? null : segment.sourceSegment,
+          source_point_start: segment.startIndex == null ? null : segment.startIndex,
+          source_point_end: segment.endIndex == null ? null : segment.endIndex,
+          source_time_start: segment.startedAt || null,
+          source_time_end: segment.endedAt || null,
+          candidate_id: (options.sourceId || 'untracked') + ':' + hashString(JSON.stringify(coords)),
+          candidate_status: warningReasons.length ? 'needs_review' : 'review',
+          warning_reasons: warningReasons
         }
       });
     }
@@ -537,23 +655,26 @@ var DeltaExtractor = (function () {
     if (typeof onProgress !== 'function') {
       onProgress = function () {};
     }
+    _lastResult = null;
 
     // Step 1 — Read file as text
-    var reader = new FileReader();
-
-    reader.onerror = function () {
-      onProgress('error', 'Failed to read the file.');
-    };
-
-    reader.onload = function (e) {
-      try {
+    return new Promise(function (resolve) {
+      var reader = new FileReader();
+      reader.onerror = function () {
+        onProgress('error', 'Failed to read the file.');
+        resolve(null);
+      };
+      reader.onload = function (e) {
+        try {
         var contentString = e.target.result;
         var fileName = (file && file.name) || '';
 
         // Step 2 — Parse GPX or GeoJSON
         var parsed = parseTrack(contentString, fileName);
+        var prepared = splitTrackSegments(parsed.segments);
+        var sourceId = 'track-' + hashString(contentString) + '-' + contentString.length;
         var typeLabel = fileName.toLowerCase().endsWith('.geojson') || fileName.toLowerCase().endsWith('.json') ? 'GeoJSON' : 'GPX';
-        onProgress('parse', typeLabel + ' parsed: ' + parsed.coords.length + ' points');
+        onProgress('parse', typeLabel + ' parsed: ' + parsed.coords.length + ' points in ' + prepared.segments.length + ' continuous parts');
 
         // Step 3 — Fetch OSM roads (async with fast parallel race)
         onProgress('fetch', '🌐 Connecting to OpenStreetMap mirrors…');
@@ -565,19 +686,20 @@ var DeltaExtractor = (function () {
             onProgress('extract', '✂️ Analyzing overlap against ' + roadCoordArrays.length + ' OSM road segments…');
 
             // Step 4 — Extract shortcuts
-            var shortcuts = extractShortcuts(
-              parsed.coords,
+            var candidates = extractDetailed(
+              prepared.segments,
               roadCoordArrays,
               bufferMeters,
               minLengthMeters
             );
+            var shortcuts = candidates.map(function (item) { return item.coords; });
 
             // Step 5 — Display on map
             displayOnMap(map, shortcuts, roadCoordArrays);
             onProgress('display', 'Rendering results on map…');
 
             // Step 6 — Build GeoJSON and store
-            var geojson = buildGeoJSON(shortcuts, bufferMeters);
+            var geojson = buildGeoJSON(candidates, bufferMeters, { sourceId: sourceId });
             _lastResult = geojson;
 
             // Step 7 — Compute total length and report done
@@ -590,18 +712,24 @@ var DeltaExtractor = (function () {
             onProgress('done', {
               geojson: geojson,
               segmentCount: shortcuts.length,
+              candidateCount: shortcuts.length,
+              reviewCount: geojson.features.filter(function (feature) { return feature.properties.candidate_status === 'needs_review'; }).length,
+              warnings: prepared.warnings,
               totalLengthMeters: Math.round(totalLength * 100) / 100
             });
+            resolve(geojson);
           })
           .catch(function (err) {
             onProgress('error', 'OSM fetch failed: ' + err.message);
+            resolve(null);
           });
-      } catch (err) {
-        onProgress('error', err.message);
-      }
-    };
-
-    reader.readAsText(file);
+        } catch (err) {
+          onProgress('error', err.message);
+          resolve(null);
+        }
+      };
+      reader.readAsText(file);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -613,6 +741,7 @@ var DeltaExtractor = (function () {
     parseGPX: parseGPX,
     parseGeoJSON: parseGeoJSON,
     parseTrack: parseTrack,
+    prepareTrack: splitTrackSegments,
     fetchOSMRoads: fetchOSMRoads,
     extractShortcuts: extractShortcuts,
     buildGeoJSON: buildGeoJSON,

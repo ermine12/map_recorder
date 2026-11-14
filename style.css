@@ -533,6 +533,17 @@ html, body {
   color: #E51B23;
 }
 
+.delta-review[hidden] { display: none; }
+.delta-review { display: grid; gap: 8px; max-height: 220px; overflow-y: auto; }
+.delta-review > p { margin: 0; font-size: 12px; line-height: 1.4; color: rgba(255, 255, 255, 0.75); }
+.delta-review-list { display: grid; gap: 6px; }
+.delta-review-item { display: flex; align-items: flex-start; gap: 9px; padding: 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.07); color: #fff; font-size: 12px; line-height: 1.35; }
+.delta-review-choice { display: flex; align-items: flex-start; gap: 9px; flex: 1; min-width: 0; }
+.delta-review-item input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: #10b981; }
+.delta-review-item strong { display: block; font-size: 12px; }
+.delta-review-item small { display: block; color: rgba(255, 255, 255, 0.7); }
+.delta-review-show { flex: none; border: 0; border-radius: 6px; padding: 6px 8px; background: rgba(255, 255, 255, 0.15); color: #fff; font: inherit; }
+
 /* ---- Delta buttons ---- */
 .delta-buttons {
   display: flex;
@@ -563,6 +574,7 @@ html, body {
   display: flex;
   gap: 8px;
 }
+.master-legacy-note { margin: 0; padding: 8px; border-radius: 8px; background: rgba(245, 158, 11, 0.14); color: #fcd68a; font-size: 12px; line-height: 1.4; }
 
 .master-stat-card {
   flex: 1;
