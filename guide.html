@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How to use Map Recorder</title>
+  <style>
+    body { margin: 0; background: #18181d; color: #f4f4f5; font: 16px/1.55 system-ui, sans-serif; }
+    main { max-width: 760px; margin: auto; padding: 24px 20px 64px; }
+    h1 { font-size: 1.8rem; line-height: 1.2; }
+    h2 { margin-top: 2rem; font-size: 1.2rem; }
+    a { color: #a5b4fc; }
+    li { margin: .55rem 0; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; vertical-align: top; padding: .55rem .4rem; border-bottom: 1px solid #444; }
+    th { color: #ddd; }
+    .note { background: #292931; border-left: 4px solid #f59e0b; padding: .8rem 1rem; }
+  </style>
+</head>
+<body>
+<main>
+  <p><a href="index.html">← Back to the map</a></p>
+  <h1>How to use Map Recorder</h1>
+  <p>Map Recorder compares a recorded walk with OpenStreetMap (OSM) and paths you already saved. It proposes parts that may be new. <strong>You decide which parts are real and walkable.</strong> Keep the original Organic Maps recording as a backup.</p>
+
+  <h2>Review a recorded walk</h2>
+  <ol>
+    <li>Open <strong>Delta</strong>, choose <strong>Load Track</strong>, and select the original GPX or GeoJSON file. You can choose <strong>Skip GPS</strong> when reviewing a file; live GPS is only for the Recorder. Delta sends the walk's map area to OSM lookup servers, but the recording stays on your device.</li>
+    <li>Start with <strong>Road Buffer 4.5 m</strong> and <strong>Min Length 3 m</strong>. Choose <strong>Extract</strong>. The app needs internet access to compare with OSM.</li>
+    <li>Read the summary. Open <strong>Map layers</strong> to see the colors and switch lines on or off. These switches affect the display only.</li>
+    <li>Open <strong>Removed or skipped pieces</strong>. Select <strong>Show</strong> for a blue OSM, purple Master, or tiny skipped section to see where it is and why it was excluded. Compare it with the gray original walk and the base map.</li>
+    <li>Select <strong>Show</strong> for each proposed path. The selected piece turns green and the map zooms to it. The floating <strong>Map</strong> button hides the controls; <strong>Controls</strong> brings them back without losing your review.</li>
+    <li>Tick only paths you recognize as real and walkable. Amber <strong>Check GPS</strong> pieces are near a pause, jump, or tangle and need extra care.</li>
+    <li>Choose <strong>Save Approved</strong> to store checked paths in this browser, or <strong>Approved GeoJSON</strong> to download them for your other map. You can do both. <strong>Clear</strong> clears this review, not the saved master.</li>
+  </ol>
+
+  <h2>What the colors mean</h2>
+  <table>
+    <tr><th>Layer</th><th>Meaning</th></tr>
+    <tr><td>Gray · Original walk</td><td>The observed walk, separated at known gaps.</td></tr>
+    <tr><td>Blue · On OSM</td><td>Parts near mapped roads, excluded from new proposals.</td></tr>
+    <tr><td>Purple · In Master</td><td>Parts already close to a saved path.</td></tr>
+    <tr><td>Orange · New path</td><td>A proposal waiting for your approval.</td></tr>
+    <tr><td>Amber · Check GPS</td><td>A proposed piece affected by suspicious recording quality.</td></tr>
+    <tr><td>Dashed gray · Tiny skipped</td><td>A short piece excluded by Min Length or by the Master's fixed 3 m minimum. Select Show for its reason.</td></tr>
+    <tr><td>Red markers · Gaps / tangles</td><td>Endpoints of a recording gap or uncertain tangle boundary; the app does not claim a path between them.</td></tr>
+  </table>
+
+  <h2>If a decision looks wrong</h2>
+  <p>A real path close to a mapped road may disappear with a large Road Buffer. Lower the buffer and choose Extract again. A small buffer can leave GPS drift beside a road. Lower Min Length to inspect a short connector skipped after OSM comparison. A tiny piece left after Master comparison still has a fixed 3 m minimum. These settings help you inspect uncertain cases; they cannot prove where a path lies.</p>
+  <p>Keep doubtful pieces unchecked. Walk the place again or correct the source recording if needed. The app isolates tangles but cannot reconstruct the true route through bad GPS data.</p>
+
+  <h2>Recorder, Master Map, and backups</h2>
+  <p>In <strong>Recorder</strong>, choose Start, walk, then Stop. <strong>Review for Master</strong> sends that recording through the same Delta checks. In <strong>Master Map</strong>, use <strong>Review Past GeoJSON</strong> to inspect an older file.</p>
+  <p class="note">The master lives in this browser's local storage. Use <strong>Export Clean Master</strong> for a backup. Paths saved before the review checks may still contain old tangles. Export a backup, clear the old master, then process the original recordings again through Delta.</p>
+  <p>The approved GeoJSON is a map overlay. A navigation app still needs checked junctions and building entrances before it can route along these paths.</p>
+</main>
+</body>
+</html>

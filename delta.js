@@ -25,6 +25,8 @@ var DeltaExtractor = (function () {
 
   /** @type {object|null} Last computed GeoJSON result */
   var _lastResult = null;
+  /** @type {object|null} Observable reasons for every part omitted from candidates. */
+  var _lastAnalysis = null;
 
   // ---------------------------------------------------------------------------
   // 1. Universal Track Parsers (GPX & GeoJSON)
@@ -308,7 +310,7 @@ var DeltaExtractor = (function () {
   // Treat long pauses as gaps, not as a straight line connecting two fixes.
   // Quality flags remain attached to the original observations for review.
   function splitTrackSegments(sourceSegments) {
-    var output = [], warnings = [];
+    var output = [], warnings = [], gaps = [];
     for (var s = 0; s < sourceSegments.length; s++) {
       var source = sourceSegments[s], coords = source.coords, times = source.times || [];
       var tangled = new Set();
@@ -326,14 +328,14 @@ var DeltaExtractor = (function () {
           for (var q = start; q < start + 20; q++) tangled.add(q);
         }
       }
-      var chunkStart = 0, pendingGap = false;
+      var chunkStart = 0, pendingGapReason = null;
       function addChunk(end) {
         if (end - chunkStart < 2) {
           warnings.push('Track ' + (s + 1) + ' has an isolated point at ' + chunkStart + '; no line was drawn across the gap');
           return;
         }
         var reasons = [];
-        if (pendingGap) reasons.push('Recording resumed after a long time gap');
+        if (pendingGapReason) reasons.push(pendingGapReason);
         if (Array.from(tangled).some(function (index) { return index >= chunkStart && index < end; })) {
           reasons.push('Repeated movement within a small area; check for GPS drift');
         }
@@ -352,20 +354,35 @@ var DeltaExtractor = (function () {
         var tangleBoundary = tangled.has(i) !== tangled.has(i - 1);
         if (timeGap || badSpeed || tangleBoundary) {
           addChunk(i);
+          if (timeGap || badSpeed || tangleBoundary) {
+            gaps.push({
+              from: coords[i - 1].slice(0, 2),
+              to: coords[i].slice(0, 2),
+              sourceSegment: s,
+              type: timeGap || badSpeed ? 'unobserved' : 'uncertain',
+              reason: timeGap && elapsed > 120000 ? 'Recording paused for more than two minutes' :
+                badSpeed ? 'Implausible movement between GPS fixes' :
+                  timeGap ? 'Timestamps did not increase' : 'Path split at a tangled section',
+              elapsedSeconds: elapsed == null ? null : Math.round(elapsed / 1000),
+              distanceMeters: Math.round(distanceMeters(coords[i - 1], coords[i]) * 10) / 10
+            });
+          }
           warnings.push('Track ' + (s + 1) + ' split at point ' + i +
             (timeGap && elapsed > 120000 ? ' after a ' + Math.round(elapsed / 1000) + ' s pause' :
               badSpeed ? ' after an implausible GPS update' : ' at a tangled section'));
           chunkStart = i;
-          pendingGap = timeGap || badSpeed;
+          pendingGapReason = timeGap && elapsed > 120000 ? 'Recording resumed after a long time gap' :
+            badSpeed ? 'Recording resumed after an implausible GPS update' :
+              timeGap ? 'Recording timestamps were out of order' : null;
         }
       }
       addChunk(coords.length);
       if (tangled.size) warnings.push('Track ' + (s + 1) + ' contains repeated movement in a small area');
     }
-    return { segments: output, warnings: warnings };
+    return { segments: output, warnings: warnings, gaps: gaps };
   }
 
-  function extractDetailed(sourceSegments, roadCoordArrays, bufferMeters, minLengthMeters) {
+  function classifyDetailed(sourceSegments, roadCoordArrays, bufferMeters, minLengthMeters) {
     var roads = [];
     for (var r = 0; r < roadCoordArrays.length; r++) {
       var rc = roadCoordArrays[r];
@@ -397,53 +414,80 @@ var DeltaExtractor = (function () {
       }
       return interpolate(a, b, (left + right) / 2);
     }
-    var result = [];
+    var result = { candidates: [], osmCovered: [], tooShort: [] };
     for (var s = 0; s < sourceSegments.length; s++) {
       var source = sourceSegments[s], track = source.coords;
       if (track.length < 2) continue;
       var samples = [track[0]], sampleOrigins = [source.startIndex || 0];
       for (var i = 1; i < track.length; i++) {
-        var count = Math.max(1, Math.ceil(distanceMeters(track[i - 1], track[i]) / 2));
+      var sampleStep = Math.min(2, Math.max(0.5, bufferMeters / 2));
+      var count = Math.max(1, Math.ceil(distanceMeters(track[i - 1], track[i]) / sampleStep));
         for (var step = 1; step <= count; step++) {
           samples.push(interpolate(track[i - 1], track[i], step / count));
           sampleOrigins.push((source.startIndex || 0) + i - 1 + step / count);
         }
       }
-      var current = null, currentStart = null, currentEnd = null, previousOnRoad = onRoad(samples[0]);
+      var active = null, previousOnRoad = onRoad(samples[0]);
       function finish() {
-        if (current && current.length >= 2 && turf.length(turf.lineString(current), { units: 'meters' }) >= minLengthMeters) {
-          var from = Math.floor(currentStart), to = Math.ceil(currentEnd);
+        if (!active || active.coords.length < 2) { active = null; return; }
+        var metres = turf.length(turf.lineString(active.coords), { units: 'meters' });
+        if (metres <= 0.01) { active = null; return; }
+        var from = Math.floor(active.startIndex), to = Math.ceil(active.endIndex);
+        var shared = {
+          coords: active.coords,
+          sourceSegment: source.sourceSegment,
+          startIndex: from,
+          endIndex: to,
+          startedAt: source.startedAt,
+          endedAt: source.endedAt,
+          lengthMeters: Math.round(metres * 100) / 100
+        };
+        if (active.onRoad) {
+          result.osmCovered.push(Object.assign({
+            reason: 'Near an OpenStreetMap road (within ' + bufferMeters + ' m)'
+          }, shared));
+        } else if (metres < minLengthMeters) {
+          result.tooShort.push(Object.assign({
+            reason: 'Unmapped fragment shorter than ' + minLengthMeters + ' m'
+          }, shared));
+        } else {
           var reasons = (source.warningReasons || []).slice();
-          if ((source.tangledIndices || []).some(function (index) { return index >= from && index <= to; })) {
+          if ((source.tangledIndices || []).some(function (index) { return index >= from && index <= to; }) &&
+              !reasons.some(function (reason) { return reason.indexOf('Repeated movement') !== -1; })) {
             reasons.push('Repeated movement within a small area; check for GPS drift');
           }
-          result.push({ coords: current, sourceSegment: source.sourceSegment,
-            startIndex: from, endIndex: to,
-            startedAt: source.startedAt, endedAt: source.endedAt,
-            warningReasons: reasons });
+          result.candidates.push(Object.assign({ warningReasons: reasons }, shared));
         }
-        current = null; currentStart = null; currentEnd = null;
+        active = null;
+      }
+      function addSpan(isOnRoad, fromPoint, toPoint, startIndex, endIndex) {
+        if (!active || active.onRoad !== isOnRoad) {
+          finish();
+          active = { onRoad: isOnRoad, coords: [fromPoint], startIndex: startIndex, endIndex: endIndex };
+        } else if (distanceMeters(active.coords[active.coords.length - 1], fromPoint) > 0.01) {
+          active.coords.push(fromPoint);
+        }
+        if (distanceMeters(active.coords[active.coords.length - 1], toPoint) > 0.01) active.coords.push(toPoint);
+        active.endIndex = endIndex;
       }
       for (var k = 1; k < samples.length; k++) {
         var before = samples[k - 1], after = samples[k], nextOnRoad = onRoad(after);
-        if (!previousOnRoad && !nextOnRoad) {
-          if (!current) { current = [before]; currentStart = sampleOrigins[k - 1]; }
-          current.push(after);
-          currentEnd = sampleOrigins[k];
-        } else if (!previousOnRoad && nextOnRoad) {
-          if (!current) { current = [before]; currentStart = sampleOrigins[k - 1]; }
-          current.push(boundary(before, after, false));
-          currentEnd = sampleOrigins[k];
-          finish();
-        } else if (previousOnRoad && !nextOnRoad) {
-          current = [boundary(before, after, true), after];
-          currentStart = sampleOrigins[k - 1]; currentEnd = sampleOrigins[k];
+        if (previousOnRoad === nextOnRoad) {
+          addSpan(previousOnRoad, before, after, sampleOrigins[k - 1], sampleOrigins[k]);
+        } else {
+          var crossing = boundary(before, after, previousOnRoad);
+          addSpan(previousOnRoad, before, crossing, sampleOrigins[k - 1], sampleOrigins[k]);
+          addSpan(nextOnRoad, crossing, after, sampleOrigins[k - 1], sampleOrigins[k]);
         }
         previousOnRoad = nextOnRoad;
       }
       finish();
     }
     return result;
+  }
+
+  function extractDetailed(sourceSegments, roadCoordArrays, bufferMeters, minLengthMeters) {
+    return classifyDetailed(sourceSegments, roadCoordArrays, bufferMeters, minLengthMeters).candidates;
   }
 
   // Retain the historical API for callers that pass a single coordinate list.
@@ -656,6 +700,7 @@ var DeltaExtractor = (function () {
       onProgress = function () {};
     }
     _lastResult = null;
+    _lastAnalysis = null;
 
     // Step 1 — Read file as text
     return new Promise(function (resolve) {
@@ -686,12 +731,13 @@ var DeltaExtractor = (function () {
             onProgress('extract', '✂️ Analyzing overlap against ' + roadCoordArrays.length + ' OSM road segments…');
 
             // Step 4 — Extract shortcuts
-            var candidates = extractDetailed(
+            var classification = classifyDetailed(
               prepared.segments,
               roadCoordArrays,
               bufferMeters,
               minLengthMeters
             );
+            var candidates = classification.candidates;
             var shortcuts = candidates.map(function (item) { return item.coords; });
 
             // Step 5 — Display on map
@@ -709,8 +755,39 @@ var DeltaExtractor = (function () {
               totalLength += turf.length(line, { units: 'meters' });
             }
 
+            function totalOf(items) {
+              return Math.round(items.reduce(function (sum, item) { return sum + item.lengthMeters; }, 0) * 100) / 100;
+            }
+            var recordedMetres = prepared.segments.reduce(function (sum, segment) {
+              return sum + turf.length(turf.lineString(segment.coords), { units: 'meters' });
+            }, 0);
+            var summary = {
+              recordedMeters: Math.round(recordedMetres * 100) / 100,
+              osmCoveredMeters: totalOf(classification.osmCovered),
+              tooShortMeters: totalOf(classification.tooShort),
+              candidateMeters: Math.round(totalLength * 100) / 100,
+              flaggedCandidateMeters: Math.round(geojson.features.reduce(function (sum, feature) {
+                return sum + (feature.properties.candidate_status === 'needs_review' ? feature.properties.length_meters : 0);
+              }, 0) * 100) / 100,
+              gapCount: prepared.gaps.length,
+              candidateCount: candidates.length,
+              tooShortCount: classification.tooShort.length,
+              osmCoveredCount: classification.osmCovered.length,
+              continuousSegmentCount: prepared.segments.length
+            };
+            _lastAnalysis = {
+              originalSegments: prepared.segments.map(function (segment) { return segment.coords; }),
+              osmCovered: classification.osmCovered,
+              tooShort: classification.tooShort,
+              gaps: prepared.gaps,
+              candidates: geojson.features,
+              summary: summary
+            };
+
             onProgress('done', {
               geojson: geojson,
+              analysis: _lastAnalysis,
+              summary: summary,
               segmentCount: shortcuts.length,
               candidateCount: shortcuts.length,
               reviewCount: geojson.features.filter(function (feature) { return feature.properties.candidate_status === 'needs_review'; }).length,
@@ -754,6 +831,8 @@ var DeltaExtractor = (function () {
     get _layers() { return _layers; },
     set _layers(val) { _layers = val; },
     get _lastResult() { return _lastResult; },
-    set _lastResult(val) { _lastResult = val; }
+    set _lastResult(val) { _lastResult = val; },
+    get _lastAnalysis() { return _lastAnalysis; },
+    set _lastAnalysis(val) { _lastAnalysis = val; }
   };
 })();

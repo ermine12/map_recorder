@@ -770,6 +770,17 @@ function downloadGeoJSON() {
 // ============================================
 // Button Bindings
 // ============================================
+function setControlsCollapsed(collapsed) {
+  document.body.classList.toggle('panel-collapsed', collapsed);
+  const toggle = document.getElementById('btn-toggle-controls');
+  if (toggle) {
+    toggle.textContent = collapsed ? 'Controls' : 'Map';
+    toggle.setAttribute('aria-label', collapsed ? 'Open controls' : 'Hide controls and show map');
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+  }
+  if (state.map) requestAnimationFrame(() => state.map.invalidateSize());
+}
+
 function bindControls() {
   // Recorder tab buttons
   dom.btnStart.addEventListener('click', startRecording);
@@ -778,10 +789,14 @@ function bindControls() {
   dom.btnDownload.addEventListener('click', downloadGeoJSON);
   dom.btnGrantGps.addEventListener('click', onGrantGps);
   dom.btnSkipGps.addEventListener('click', onSkipGps);
+  document.getElementById('btn-toggle-controls')?.addEventListener('click', () => {
+    setControlsCollapsed(!document.body.classList.contains('panel-collapsed'));
+  });
 
   // Tab switching
   document.querySelectorAll('#tab-bar .tab').forEach((tab) => {
     tab.addEventListener('click', () => {
+      setControlsCollapsed(false);
       // Deactivate all tabs and panels
       document.querySelectorAll('#tab-bar .tab').forEach((t) => t.classList.remove('active'));
       document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
@@ -819,11 +834,21 @@ function bindDeltaControls() {
   const deltaStatusText = document.getElementById('delta-status-text');
   const reviewPanel = document.getElementById('delta-review');
   const reviewList = document.getElementById('delta-review-list');
+  const reviewSummary = document.getElementById('delta-review-summary');
+  const layerControls = document.getElementById('delta-layer-controls');
+  const selectedDetail = document.getElementById('delta-selected-detail');
+  const removedDetails = document.getElementById('delta-removed-details');
+  const removedList = document.getElementById('delta-removed-list');
   const bufferInput = document.getElementById('delta-buffer');
   const minLengthInput = document.getElementById('delta-min-length');
 
   let selectedFile = null;
   let reviewCandidates = [];
+  let reviewMapGroup = null;
+  let reviewLayers = {};
+  let candidateMapLayers = [];
+  let reviewLineLayers = [];
+  let gapMapMarkers = [];
   const approvedIndexes = new Set();
 
   function refreshApprovalButtons() {
@@ -849,7 +874,158 @@ function bindDeltaControls() {
     approvedIndexes.clear();
     reviewList.replaceChildren();
     reviewPanel.hidden = true;
+    if (reviewMapGroup) state.map.removeLayer(reviewMapGroup);
+    reviewMapGroup = null;
+    reviewLayers = {};
+    candidateMapLayers = [];
+    reviewLineLayers = [];
+    gapMapMarkers = [];
+    if (reviewSummary) { reviewSummary.hidden = true; reviewSummary.textContent = ''; }
+    if (layerControls) layerControls.hidden = true;
+    if (selectedDetail) { selectedDetail.hidden = true; selectedDetail.textContent = ''; }
+    if (removedDetails) removedDetails.hidden = true;
+    if (removedList) removedList.replaceChildren();
     refreshApprovalButtons();
+  }
+
+  const layerKeys = ['original', 'osm', 'master', 'new', 'warning', 'tiny', 'gaps'];
+  const reviewColors = { original: '#64748b', osm: '#2563eb', master: '#9333ea', new: '#ff6b00',
+    warning: '#f59e0b', tiny: '#64748b', gaps: '#dc2626' };
+  layerKeys.forEach(key => {
+    document.getElementById(`review-layer-${key}`)?.addEventListener('change', event => {
+      if (!reviewMapGroup || !reviewLayers[key]) return;
+      if (event.target.checked) reviewMapGroup.addLayer(reviewLayers[key]);
+      else reviewMapGroup.removeLayer(reviewLayers[key]);
+    });
+  });
+
+  function ensureReviewLayerVisible(key) {
+    if (!reviewMapGroup || !reviewLayers[key]) return;
+    const checkbox = document.getElementById(`review-layer-${key}`);
+    if (checkbox) checkbox.checked = true;
+    reviewMapGroup.addLayer(reviewLayers[key]);
+  }
+
+  function showMapSection(bounds, label, reason, highlightedLayer, category) {
+    if (category) ensureReviewLayerVisible(category);
+    if (selectedDetail) {
+      selectedDetail.hidden = false;
+      selectedDetail.textContent = `${highlightedLayer ? 'Shown in green: ' : 'Showing: '}${label}${reason ? ` — ${reason}` : ''}`;
+    }
+    reviewLineLayers.forEach(({ layer, key }) => {
+      layer.setStyle({ color: reviewColors[key], weight: key === 'original' ? 3 : 5,
+        opacity: key === 'original' ? 0.45 : highlightedLayer === layer ? 1 : 0.6 });
+    });
+    if (highlightedLayer) {
+      highlightedLayer.setStyle({ color: '#16a34a', weight: 8, opacity: 1 });
+      highlightedLayer.bringToFront();
+    }
+    if (window.innerWidth <= 900) setControlsCollapsed(true);
+    requestAnimationFrame(() => {
+      state.map.invalidateSize();
+      state.map.fitBounds(bounds, { padding: [36, 36], maxZoom: 20 });
+    });
+  }
+
+  function renderAuditMap(analysis, masterCovered, masterSkipped) {
+    if (!analysis) return;
+    DeltaExtractor.clearMapLayers(state.map);
+    reviewMapGroup = L.layerGroup().addTo(state.map);
+    layerKeys.forEach(key => {
+      reviewLayers[key] = L.layerGroup();
+      if (document.getElementById(`review-layer-${key}`)?.checked !== false) reviewMapGroup.addLayer(reviewLayers[key]);
+    });
+    function addLine(key, coordinates, label, reason, extra = {}) {
+      if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
+      const latLngs = coordinates.map(point => [point[1], point[0]]);
+      const layer = L.polyline(latLngs, {
+        color: reviewColors[key], weight: key === 'original' ? 3 : 5,
+        opacity: key === 'original' ? 0.45 : 0.82,
+        dashArray: key === 'tiny' ? '5 5' : key === 'original' ? '3 5' : null,
+        ...extra
+      }).addTo(reviewLayers[key]);
+      const popup = document.createElement('div');
+      popup.textContent = reason ? `${label}: ${reason}` : label;
+      layer.bindPopup(popup);
+      reviewLineLayers.push({ layer, key });
+      return layer;
+    }
+    (analysis.originalSegments || []).forEach(coords => addLine('original', coords, 'Original walk'));
+    const removed = [];
+    (analysis.osmCovered || []).forEach((item, index) => {
+      const layer = addLine('osm', item.coords, `On OSM ${index + 1}`, item.reason);
+      if (layer) removed.push({ layer, category: 'osm', label: `On OSM ${index + 1}`, reason: item.reason || 'Within the mapped road buffer', length: item.lengthMeters });
+    });
+    masterCovered.forEach((coords, index) => {
+      const layer = addLine('master', coords, `In Master ${index + 1}`, 'Already close to an approved path');
+      if (layer) removed.push({ layer, category: 'master', label: `In Master ${index + 1}`, reason: 'Already close to an approved path', length: turf.length(turf.lineString(coords), { units: 'meters' }) });
+    });
+    (analysis.tooShort || []).forEach((item, index) => {
+      const layer = addLine('tiny', item.coords, `Tiny skipped ${index + 1}`, item.reason);
+      if (layer) removed.push({ layer, category: 'tiny', label: `Tiny skipped ${index + 1}`, reason: item.reason || 'Shorter than the minimum length', length: item.lengthMeters });
+    });
+    masterSkipped.forEach((coords, index) => {
+      const reason = 'New fragment shorter than 3 m after Master comparison';
+      const layer = addLine('tiny', coords, `Tiny after Master ${index + 1}`, reason);
+      if (layer) removed.push({ layer, category: 'tiny', label: `Tiny after Master ${index + 1}`,
+        reason, length: turf.length(turf.lineString(coords), { units: 'meters' }) });
+    });
+    (analysis.gaps || []).forEach((gap, index) => {
+      const endpoints = [gap.from, gap.to].filter(point => Array.isArray(point));
+      if (endpoints.length !== 2) return;
+      const markers = endpoints.map(point => L.circleMarker([point[1], point[0]], {
+        radius: 6, color: reviewColors.gaps, fillColor: reviewColors.gaps, fillOpacity: 0.9
+      }).bindPopup(`Recording gap ${index + 1}: no route was drawn here`).addTo(reviewLayers.gaps));
+      gapMapMarkers.push(...markers);
+      removed.push({ bounds: L.latLngBounds(endpoints.map(point => [point[1], point[0]])),
+        markers, category: 'gaps', label: `Recording gap ${index + 1}`, reason: gap.reason || 'No reliable walk was recorded between these points', length: null });
+    });
+    candidateMapLayers = reviewCandidates.map((feature, index) => {
+      const warning = (feature.properties?.warning_reasons || []).length > 0;
+      return addLine(warning ? 'warning' : 'new', feature.geometry.coordinates,
+        `Proposed path ${index + 1}`, warning ? feature.properties.warning_reasons.join('; ') : 'Outside mapped and saved paths');
+    });
+    if (removedList) {
+      removedList.replaceChildren();
+      removed.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'delta-review-item';
+        const label = document.createElement('span');
+        label.textContent = `${item.label}${Number.isFinite(item.length) ? ` · ${Math.round(item.length)} m` : ''}`;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'delta-review-show';
+        button.textContent = 'Show';
+        button.setAttribute('aria-label', `Show ${item.label} on map`);
+        button.addEventListener('click', () => {
+          gapMapMarkers.forEach(marker => { marker.setRadius(6); marker.setStyle({ color: reviewColors.gaps, fillColor: reviewColors.gaps }); });
+          (item.markers || []).forEach(marker => { marker.setRadius(9); marker.setStyle({ color: '#16a34a', fillColor: '#16a34a' }); marker.bringToFront(); });
+          showMapSection(item.layer?.getBounds() || item.bounds, item.label, item.reason, item.layer, item.category);
+        });
+        row.append(label, button);
+        removedList.appendChild(row);
+      });
+    }
+    if (removedDetails) {
+      removedDetails.hidden = removed.length === 0;
+      removedDetails.querySelector('summary').textContent = `Removed or skipped pieces (${removed.length})`;
+    }
+    if (layerControls) layerControls.hidden = false;
+    if (reviewSummary) {
+      const summary = analysis.summary || {};
+      const masterMeters = masterCovered.reduce((sum, coords) => sum + turf.length(turf.lineString(coords), { units: 'meters' }), 0);
+      const proposedMeters = reviewCandidates.reduce((sum, feature) => sum + turf.length(feature, { units: 'meters' }), 0);
+      const masterSkippedMeters = masterSkipped.reduce((sum, coords) => sum + turf.length(turf.lineString(coords), { units: 'meters' }), 0);
+      reviewSummary.textContent = `Recorded ${formatDistance(summary.recordedMeters || 0)} · On OSM ${formatDistance(summary.osmCoveredMeters || 0)} · In Master ${formatDistance(masterMeters)} · Tiny skipped ${formatDistance((summary.tooShortMeters || 0) + masterSkippedMeters)} · Proposed ${formatDistance(proposedMeters)} · Gaps ${summary.gapCount || 0}`;
+      reviewSummary.hidden = false;
+    }
+    if (reviewCandidates.length === 0 && analysis.originalSegments?.length) {
+      const points = analysis.originalSegments.flatMap(coords => coords.map(point => [point[1], point[0]]));
+      if (points.length) requestAnimationFrame(() => {
+        state.map.invalidateSize();
+        state.map.fitBounds(L.latLngBounds(points), { padding: [36, 36], maxZoom: 20 });
+      });
+    }
   }
 
   function showReview() {
@@ -857,16 +1033,17 @@ function bindDeltaControls() {
     const result = DeltaExtractor._lastResult;
     if (!result || !Array.isArray(result.features)) return 0;
     const master = MasterLayerManager.loadMasterCollection().features;
-    let alreadyRecorded = 0;
+    const masterCovered = [];
+    const masterSkipped = [];
     result.features.forEach((feature) => {
-      const newParts = ShortcutMerger.getNovelSegments(feature, master, 5.0);
-      if (newParts.length === 0) alreadyRecorded++;
+      const inspected = ShortcutMerger.inspectAgainstMaster(feature, master, 5.0);
+      const newParts = inspected.novel;
       newParts.forEach(part => reviewCandidates.push(part));
+      inspected.covered.forEach(coords => masterCovered.push(coords));
+      inspected.skipped.forEach(coords => masterSkipped.push(coords));
     });
-    const mapGroup = reviewCandidates.length
-      ? DeltaExtractor.displayOnMap(state.map, reviewCandidates.map(feature => feature.geometry.coordinates), [])
-      : null;
-    const mapLayers = mapGroup ? mapGroup.getLayers() : [];
+    const analysis = DeltaExtractor._lastAnalysis;
+    renderAuditMap(analysis, masterCovered, masterSkipped);
     reviewCandidates.forEach((feature, index) => {
       const props = feature.properties || {};
       const row = document.createElement('div');
@@ -897,17 +1074,17 @@ function bindDeltaControls() {
       show.textContent = 'Show';
       show.setAttribute('aria-label', `Show proposed path ${index + 1} on map`);
       show.addEventListener('click', () => {
-        state.map.fitBounds(mapLayers[index].getBounds(), { padding: [40, 40], maxZoom: 20 });
-        mapLayers.forEach((layer, layerIndex) => {
-          layer.setStyle({ color: layerIndex === index ? '#10b981' : '#ff6b00', weight: layerIndex === index ? 7 : 5 });
-        });
+        const warning = (props.warning_reasons || []).length > 0;
+        showMapSection(candidateMapLayers[index].getBounds(), `Proposed path ${index + 1}`,
+          warning ? props.warning_reasons.join('; ') : 'Outside mapped and saved paths',
+          candidateMapLayers[index], warning ? 'warning' : 'new');
       });
       row.append(choice, show);
       reviewList.appendChild(row);
     });
     reviewPanel.hidden = reviewCandidates.length === 0;
     refreshApprovalButtons();
-    return alreadyRecorded;
+    return reviewCandidates.length;
   }
 
   function loadTrackForReview(file) {
@@ -960,20 +1137,16 @@ function bindDeltaControls() {
           btnDeltaClear.disabled = false;
           showToast(message, 'error');
         } else if (step === 'done') {
-          const result = message;
-          const alreadyRecorded = showReview();
+          showReview();
           if (reviewCandidates.length === 0) {
-            setDeltaStatus(
-              'done',
-              alreadyRecorded ? 'No new paths: proposed pieces are already in the master.' : 'No candidate paths found outside mapped roads.'
-            );
+            setDeltaStatus('done', 'No new paths to approve. Open Removed or skipped pieces to inspect why.');
             btnDeltaClear.disabled = false;
             btnExtract.disabled = false;
             showToast('No new path candidates to review.', 'info');
           } else {
             setDeltaStatus(
               'done',
-              `${reviewCandidates.length} proposed path(s) to review${alreadyRecorded ? `; ${alreadyRecorded} already recorded` : ''}. Select only the real paths.`
+              `${reviewCandidates.length} proposed path(s) to review. Select only the real paths; inspect exclusions below.`
             );
             btnDeltaClear.disabled = false;
             btnExtract.disabled = false;
@@ -995,9 +1168,6 @@ function bindDeltaControls() {
         showToast(importRes.addedCount
           ? `Master updated with ${importRes.addedCount} new path piece(s).`
           : 'Those path pieces are already in the master.', importRes.addedCount ? 'success' : 'info');
-        approvedIndexes.clear();
-        reviewList.querySelectorAll('input').forEach(input => { input.checked = false; });
-        refreshApprovalButtons();
         updateMasterStatsUI();
       } catch (err) {
         showToast(`Master save failed: ${err.message}`, 'error');

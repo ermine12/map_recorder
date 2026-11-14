@@ -28,6 +28,16 @@ assert.deepEqual(extended.updatedFeatures[0].geometry.coordinates, oldPath.geome
 assert(lineLength(extended.updatedFeatures[1].geometry.coordinates) > 95);
 assert(lineLength(extended.updatedFeatures[1].geometry.coordinates) < 101);
 
+const unevenExtension = feature([[-2, 0], [110, 0]], 'walk-uneven');
+const inspected = merger.inspectAgainstMaster(unevenExtension, [oldPath], 0.5);
+assert.equal(inspected.novel.length, 1);
+assert.equal(inspected.skipped.length, 1);
+assert(lineLength(inspected.novel[0].geometry.coordinates) > 9);
+assert(lineLength(inspected.skipped[0]) > 1);
+assert(lineLength(inspected.skipped[0]) < 3);
+assert(inspected.skipped[0][0][0] < 0);
+assert(inspected.coveredMeters > 99);
+
 const denseSubset = feature([[25, 0], [35, 0], [45, 0], [55, 0], [65, 0]], 'walk-subset');
 const subsetResult = merger.mergeIntoCollection([oldPath], denseSubset, 2);
 assert.equal(subsetResult.addedCount, 0);

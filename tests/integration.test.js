@@ -157,6 +157,17 @@ test('a longer repeat walk retains the new extension and original approved line'
   assert.equal(repeatedImport.updatedFeatures.length, 2);
 });
 
+test('master comparison exposes both kept and removed geometry for map review', () => {
+  const merger = loadMerger();
+  const approved = line([[42, 9], [42.0009, 9]], 'walk-a');
+  const extension = line([[42, 9], [42.0018, 9]], 'walk-b');
+  const inspected = merger.inspectAgainstMaster(extension, [approved], 5);
+  assert.equal(inspected.novel.length, 1);
+  assert.ok(inspected.covered.length >= 1);
+  assert.ok(inspected.coveredMeters > 80 && inspected.coveredMeters < 120);
+  assert.ok(inspected.novel[0].geometry.coordinates.at(-1)[0] > 42.0017);
+});
+
 test('a densely sampled subset cannot replace or shorten an approved route', () => {
   const merger = loadMerger();
   const approved = line([[42, 9], [42.0009, 9]], 'walk-a');

@@ -24,6 +24,8 @@ html, body {
   user-select: none;
 }
 
+:root { --controls-width: min(380px, 34vw); }
+
 /* ---- GPS Permission Overlay ---- */
 .overlay {
   position: fixed;
@@ -97,7 +99,7 @@ html, body {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
+  width: calc(100% - var(--controls-width));
   height: 100%;
   z-index: 1;
 }
@@ -105,20 +107,47 @@ html, body {
 /* ---- Control panel overlay ---- */
 #controls {
   position: absolute;
+  top: 0;
   bottom: 0;
-  left: 0;
+  left: auto;
   right: 0;
+  width: var(--controls-width);
   z-index: 1000;
-  background: rgba(15, 15, 20, 0.92);
+  background: #18181d;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 10px 16px;
-  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overflow: hidden;
 }
+.controls-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #fff; font-size: 12px; font-weight: 700; }
+.controls-heading a { color: #a5b4fc; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+
+#btn-toggle-controls {
+  position: absolute;
+  z-index: 1100;
+  top: 12px;
+  right: calc(var(--controls-width) + 12px);
+  min-width: 60px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #18181d;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+body.panel-collapsed #controls { display: none; }
+body.panel-collapsed #map { width: 100%; }
+body.panel-collapsed #btn-toggle-controls { right: 12px; }
 
 /* ---- Tab bar ---- */
 #tab-bar {
@@ -131,6 +160,7 @@ html, body {
 
 .tab {
   flex: 1;
+  min-height: 44px;
   padding: 8px 6px;
   border: none;
   border-radius: 8px;
@@ -158,10 +188,14 @@ html, body {
   display: none;
   flex-direction: column;
   gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .tab-panel.active {
   display: flex;
+  flex: 1;
 }
 
 .app-title {
@@ -228,8 +262,11 @@ html, body {
 /* ---- Buttons ---- */
 #action-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
+
+#action-buttons .btn, .delta-buttons .btn, .master-actions-row .btn { flex: 1 1 43%; }
 
 .btn {
   flex: 1;
@@ -249,7 +286,7 @@ html, body {
 }
 
 .btn:disabled {
-  opacity: 0.3;
+  opacity: 0.55;
   cursor: not-allowed;
   transform: none;
 }
@@ -273,7 +310,7 @@ html, body {
 #gps-accuracy {
   position: absolute;
   top: 12px;
-  right: 12px;
+  right: calc(var(--controls-width) + 84px);
   z-index: 1000;
   background: rgba(15, 15, 20, 0.88);
   backdrop-filter: blur(10px);
@@ -289,6 +326,8 @@ html, body {
   transition: background 0.3s;
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
+
+body.panel-collapsed #gps-accuracy { right: 84px; }
 
 #gps-accuracy.good {
   border-color: rgba(34, 197, 94, 0.5);
@@ -435,6 +474,7 @@ html, body {
 
 .file-name {
   font-size: 12px;
+  min-width: 0;
   color: rgba(255, 255, 255, 0.4);
   white-space: nowrap;
   overflow: hidden;
@@ -534,9 +574,9 @@ html, body {
 }
 
 .delta-review[hidden] { display: none; }
-.delta-review { display: grid; gap: 8px; max-height: 220px; overflow-y: auto; }
+.delta-review { display: flex; flex: 1; flex-direction: column; gap: 8px; min-height: 100px; overflow: hidden; }
 .delta-review > p { margin: 0; font-size: 12px; line-height: 1.4; color: rgba(255, 255, 255, 0.75); }
-.delta-review-list { display: grid; gap: 6px; }
+.delta-review-list { display: grid; gap: 6px; min-height: 0; overflow-y: auto; align-content: start; }
 .delta-review-item { display: flex; align-items: flex-start; gap: 9px; padding: 8px; border-radius: 8px; background: rgba(255, 255, 255, 0.07); color: #fff; font-size: 12px; line-height: 1.35; }
 .delta-review-choice { display: flex; align-items: flex-start; gap: 9px; flex: 1; min-width: 0; }
 .delta-review-item input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: #10b981; }
@@ -547,8 +587,29 @@ html, body {
 /* ---- Delta buttons ---- */
 .delta-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
+#tab-extractor .delta-buttons { position: sticky; bottom: 0; z-index: 2; background: #18181d; padding-top: 8px; margin-top: auto; }
+
+.delta-review-summary, .delta-selected-detail { margin: 0; padding: 8px; background: rgba(255,255,255,0.07); border-radius: 8px; color: #fff; font-size: 12px; line-height: 1.4; }
+.delta-layer-controls, .delta-removed-details { color: #fff; font-size: 12px; }
+.delta-layer-controls summary, .delta-removed-details summary { min-height: 32px; padding: 7px 2px; font-weight: 700; cursor: pointer; }
+.delta-layer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.delta-layer-grid label { display: flex; align-items: center; gap: 5px; min-height: 30px; }
+.delta-layer-grid input { flex: none; width: 16px; height: 16px; accent-color: #6366f1; }
+.layer-swatch { display: inline-block; flex: none; width: 16px; height: 5px; border-radius: 2px; }
+.layer-original { background: #6b7280; }
+.layer-osm { background: #3b82f6; }
+.layer-master { background: #a855f7; }
+.layer-new { background: #ff6b00; }
+.layer-warning { background: #f59e0b; }
+.layer-tiny { border-top: 2px dashed #9ca3af; }
+.layer-gaps { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; }
+.delta-removed-list { display: grid; gap: 5px; max-height: 150px; overflow-y: auto; }
+.delta-removed-item { display: flex; align-items: center; gap: 8px; padding: 7px; border-radius: 6px; background: rgba(255,255,255,0.06); }
+.delta-removed-item span { flex: 1; }
+.delta-removed-item button { flex: none; min-height: 34px; padding: 5px 10px; border: 0; border-radius: 6px; background: rgba(255,255,255,0.15); color: #fff; font: inherit; }
 
 .btn-extract {
   background: #6366f1;
@@ -634,4 +695,26 @@ html, body {
 .master-btn {
   font-size: 11px !important;
   padding: 10px 8px !important;
+}
+
+@media (max-width: 900px) {
+  #map { width: 100%; }
+  #controls {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 44dvh;
+    border-left: 0;
+    border-top: 1px solid rgba(255,255,255,0.12);
+    padding: 8px 10px max(8px, env(safe-area-inset-bottom));
+  }
+  #btn-toggle-controls { top: auto; right: 12px; bottom: calc(44dvh + 10px); }
+  body.panel-collapsed #btn-toggle-controls { bottom: max(12px, env(safe-area-inset-bottom)); }
+  #gps-accuracy, body.panel-collapsed #gps-accuracy { right: 12px; }
+  .delta-upload-row { flex-wrap: wrap; gap: 4px; }
+  .delta-upload-row .btn-upload { flex: 0 0 100%; min-height: 40px; }
+  .delta-upload-row .file-name { flex: 1 1 100%; }
+  .delta-review { flex: none; max-height: 160px; }
 }

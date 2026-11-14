@@ -114,22 +114,44 @@ var ShortcutMerger = (function () {
     var coords = coordinatesOf(candidate);
     var existing = existingSegments(master);
     var pieces = [];
+    var matchedPieces = [];
+    var skippedPieces = [];
     var matchedMetres = new Array(master.length).fill(0);
     var active = null;
+    var activeMatched = null;
 
     function pushPoint(point) {
       if (!active) active = [];
       if (!active.length || distance(active[active.length - 1], point) > 0.05) active.push(point);
     }
     function finish() {
-      if (active && active.length >= 2 && lineLength(active) >= MIN_NEW_METERS) pieces.push(active);
+      if (active && active.length >= 2) {
+        var metres = lineLength(active);
+        if (metres >= MIN_NEW_METERS) pieces.push(active);
+        else if (metres > 0.05) skippedPieces.push(active);
+      }
       active = null;
     }
 
-    if (coords.length < 2 || !coords.every(validPoint)) return { pieces: [], matchedMetres: matchedMetres };
+    function pushMatched(point) {
+      if (!activeMatched) activeMatched = [];
+      if (!activeMatched.length || distance(activeMatched[activeMatched.length - 1], point) > 0.05) activeMatched.push(point);
+    }
+    function finishMatched() {
+      if (activeMatched && activeMatched.length >= 2 && lineLength(activeMatched) > 0.05) matchedPieces.push(activeMatched);
+      activeMatched = null;
+    }
+
+    if (coords.length < 2 || !coords.every(validPoint)) {
+      return { pieces: [], matchedPieces: [], skippedPieces: [], matchedMetres: matchedMetres };
+    }
     if (!existing.length) {
+      var original = coords.map(function (point) { return [point[0], point[1]]; });
+      var originalLength = lineLength(original);
       return {
-        pieces: lineLength(coords) >= MIN_NEW_METERS ? [coords.map(function (point) { return [point[0], point[1]]; })] : [],
+        pieces: originalLength >= MIN_NEW_METERS ? [original] : [],
+        matchedPieces: [],
+        skippedPieces: originalLength > 0.05 && originalLength < MIN_NEW_METERS ? [original] : [],
         matchedMetres: matchedMetres
       };
     }
@@ -146,8 +168,11 @@ var ShortcutMerger = (function () {
         var matchTo = matchingFeature(to, a, b, existing, tolerance);
         if (matchFrom >= 0 && matchTo >= 0) {
           matchedMetres[matchFrom] += distance(from, to);
+          pushMatched(from);
+          pushMatched(to);
           finish();
         } else if (matchFrom < 0 && matchTo < 0) {
+          finishMatched();
           pushPoint(from);
           pushPoint(to);
         } else {
@@ -164,7 +189,12 @@ var ShortcutMerger = (function () {
             pushPoint(from);
             pushPoint(boundary);
             finish();
+            pushMatched(boundary);
+            pushMatched(to);
           } else {
+            pushMatched(from);
+            pushMatched(boundary);
+            finishMatched();
             pushPoint(boundary);
             pushPoint(to);
           }
@@ -174,7 +204,8 @@ var ShortcutMerger = (function () {
       }
     }
     finish();
-    return { pieces: pieces, matchedMetres: matchedMetres };
+    finishMatched();
+    return { pieces: pieces, matchedPieces: matchedPieces, skippedPieces: skippedPieces, matchedMetres: matchedMetres };
   }
 
   function createNovelFeatures(candidate, pieces) {
@@ -217,6 +248,17 @@ var ShortcutMerger = (function () {
   function getNovelSegments(candidateFeature, masterFeatures, toleranceMeters) {
     var tolerance = Number.isFinite(toleranceMeters) && toleranceMeters > 0 ? toleranceMeters : DEFAULT_TOLERANCE_METERS;
     return createNovelFeatures(candidateFeature, splitOutside(candidateFeature, masterFeatures || [], tolerance).pieces);
+  }
+
+  function inspectAgainstMaster(candidateFeature, masterFeatures, toleranceMeters) {
+    var tolerance = Number.isFinite(toleranceMeters) && toleranceMeters > 0 ? toleranceMeters : DEFAULT_TOLERANCE_METERS;
+    var result = splitOutside(candidateFeature, masterFeatures || [], tolerance);
+    return {
+      novel: createNovelFeatures(candidateFeature, result.pieces),
+      covered: result.matchedPieces,
+      skipped: result.skippedPieces,
+      coveredMeters: result.matchedPieces.reduce(function (sum, coords) { return sum + lineLength(coords); }, 0)
+    };
   }
 
   function compareShortcuts(candidateFeature, existingFeature, toleranceMeters) {
@@ -304,6 +346,7 @@ var ShortcutMerger = (function () {
   return {
     compareShortcuts: compareShortcuts,
     getNovelSegments: getNovelSegments,
+    inspectAgainstMaster: inspectAgainstMaster,
     mergeIntoCollection: mergeIntoCollection,
     batchMerge: batchMerge,
     DEFAULT_TOLERANCE_METERS: DEFAULT_TOLERANCE_METERS

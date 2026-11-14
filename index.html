@@ -25,7 +25,7 @@
     <div class="overlay-card">
       <div class="overlay-icon">📍</div>
       <h2>Location Access Required</h2>
-      <p>This app needs your GPS location to record walking paths. Your data stays on your device — nothing is sent to any server.</p>
+      <p>GPS is needed to record a walk. Your recording stays on this device. Delta sends the walk's map area to OpenStreetMap lookup servers to compare roads.</p>
       <button id="btn-grant-gps" class="btn btn-start">Enable GPS Location</button>
       <button id="btn-skip-gps" class="btn-text">Continue without GPS</button>
     </div>
@@ -48,8 +48,11 @@
   <!-- Toast notification container -->
   <div id="toast-container"></div>
 
+  <button id="btn-toggle-controls" type="button" aria-label="Hide controls and show map" aria-expanded="true">Map</button>
+
   <!-- Control panel overlay -->
   <div id="controls">
+    <div class="controls-heading"><span>Map Recorder</span><a href="guide.html" target="_blank" rel="noopener">How to use</a></div>
     <!-- Tab switcher -->
     <div id="tab-bar">
       <button class="tab active" data-tab="recorder">⏺ Recorder</button>
@@ -100,14 +103,14 @@
       <!-- Buffer & min-length controls -->
       <div class="delta-settings-row">
         <div class="setting-group">
-          <label class="setting-label">Road Buffer</label>
+          <label class="setting-label" for="delta-buffer">Road Buffer</label>
           <div class="setting-input-wrap">
             <input type="number" id="delta-buffer" value="4.5" min="1" max="20" step="0.5" class="setting-input">
             <span class="setting-unit">m</span>
           </div>
         </div>
         <div class="setting-group">
-          <label class="setting-label">Min Length</label>
+          <label class="setting-label" for="delta-min-length">Min Length</label>
           <div class="setting-input-wrap">
             <input type="number" id="delta-min-length" value="3" min="1" max="50" step="1" class="setting-input">
             <span class="setting-unit">m</span>
@@ -120,8 +123,29 @@
         <span id="delta-status-text">Upload a GPX file to begin.</span>
       </div>
 
+      <p id="delta-review-summary" class="delta-review-summary" hidden></p>
+
+      <details id="delta-layer-controls" class="delta-layer-controls" hidden>
+        <summary>Map layers: show or hide what happened</summary>
+        <div class="delta-layer-grid">
+          <label><input id="review-layer-original" type="checkbox" checked><span class="layer-swatch layer-original"></span>Original walk</label>
+          <label><input id="review-layer-osm" type="checkbox" checked><span class="layer-swatch layer-osm"></span>On OSM</label>
+          <label><input id="review-layer-master" type="checkbox" checked><span class="layer-swatch layer-master"></span>In Master</label>
+          <label><input id="review-layer-new" type="checkbox" checked><span class="layer-swatch layer-new"></span>New path</label>
+          <label><input id="review-layer-warning" type="checkbox" checked><span class="layer-swatch layer-warning"></span>Check GPS</label>
+          <label><input id="review-layer-tiny" type="checkbox" checked><span class="layer-swatch layer-tiny"></span>Tiny skipped</label>
+          <label><input id="review-layer-gaps" type="checkbox" checked><span class="layer-swatch layer-gaps"></span>Gaps / tangles</label>
+        </div>
+      </details>
+
+      <p id="delta-selected-detail" class="delta-selected-detail" hidden></p>
+      <details id="delta-removed-details" class="delta-removed-details" hidden>
+        <summary>Removed or skipped pieces</summary>
+        <div id="delta-removed-list" class="delta-removed-list"></div>
+      </details>
+
       <div id="delta-review" class="delta-review" hidden>
-        <p>Review each proposed path before adding it to the master. Unchecked paths stay out of exports and the master.</p>
+        <p>Use Show to locate each piece. Select only real, walkable paths; unchecked pieces stay out of the master and export.</p>
         <div id="delta-review-list" class="delta-review-list"></div>
       </div>
 
